@@ -1,0 +1,25 @@
+name: Update Bazelisk
+
+on:
+  schedule:
+    # Run nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-bazelisk:
+    runs-on: ubuntu-latest
+    name: Check for Bazelisk updates
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Update Bazelisk and create PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./.github/workflows/update-bazelisk/update-bazelisk.sh
