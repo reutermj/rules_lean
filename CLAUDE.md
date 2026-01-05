@@ -9,7 +9,7 @@
 Runbooks are detaild procedures for use in a specific context.
 **When a runbook's context occurs, YOU MUST ALWAYS read the runbook BEFORE taking any action.**
 
-- **BEFORE creating any commit, YOU MUST read**: [docs/runbooks/commit-message-guidelines.md](docs/runbooks/commit-message-guidelines.md)
+- **BEFORE creating any commit, YOU MUST read**: .claude/commit-message-guidelines.md
 
 ## Comment Philosophy
 
