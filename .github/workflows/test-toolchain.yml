@@ -1,0 +1,13 @@
+name: Test Toolchain Registration
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test registration
+        run: .github/workflows/test-toolchain/step-1.1-test-registration.sh
+      - name: Test expected targets
+        run: .github/workflows/test-toolchain/step-2.1-test-expected-targets.sh
+      - name: Test binaries runnable
+        run: .github/workflows/test-toolchain/step-3.1-test-binaries-runnable.sh

@@ -1,0 +1,23 @@
+load("@buildifier_prebuilt//:rules.bzl", "buildifier")
+
+# ./bazel run //tools:buildifier.check
+buildifier(
+    name = "buildifier.check",
+    exclude_patterns = [
+        "./.git/*",
+    ],
+    lint_mode = "warn",
+    mode = "check",
+    visibility = ["//visibility:private"],
+)
+
+# ./bazel run //tools:buildifier.fix
+buildifier(
+    name = "buildifier.fix",
+    exclude_patterns = [
+        "./.git/*",
+    ],
+    lint_mode = "warn",
+    mode = "fix",
+    visibility = ["//visibility:private"],
+)
