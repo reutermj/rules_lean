@@ -1,0 +1,18 @@
+load("@rules_lean//lean:defs.bzl", "lean_binary")
+
+# Test: Module naming with BUILD file colocated with source file
+#
+# Requirement: When a BUILD file is in the same directory as the source file,
+# the module name must still be derived from the workspace-relative path, not
+# just the filename or path relative to the BUILD file.
+#
+# Approach: This BUILD file is at //nested/deep/ and references App.lean in the
+# same directory. The module name should be "nested.deep.App", not just "App".
+#
+# Why this matters: A common mistake is deriving module names relative to the
+# BUILD file location. This test ensures we always use workspace-relative paths,
+# which is required for consistent module naming across a monorepo.
+lean_binary(
+    name = "colocated_module_test",
+    src = "App.lean",
+)

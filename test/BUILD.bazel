@@ -1,0 +1,8 @@
+# Test suite for rules_lean
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        "//test/unit/rules:lean_binary_test",
+    ],
+)

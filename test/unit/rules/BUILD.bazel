@@ -1,0 +1,3 @@
+load(":lean_binary_test.bzl", "lean_binary_test_suite")
+
+lean_binary_test_suite(name = "lean_binary_test")

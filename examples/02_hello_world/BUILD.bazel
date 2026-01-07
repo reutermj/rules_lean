@@ -1,0 +1,45 @@
+load("@rules_lean//lean:defs.bzl", "lean_binary")
+
+# Test: Basic lean_binary compilation and execution
+#
+# Requirement: A minimal Lean program should compile and run successfully.
+#
+# Approach: Build and run a simple "Hello, World!" program.
+#
+# Why this matters: This is the most basic sanity check that the toolchain
+# and rules are working end-to-end.
+lean_binary(
+    name = "hello",
+    src = "Main.lean",
+)
+
+# Test: Exit code propagation from Lean programs
+#
+# Requirement: When a Lean program exits with a non-zero code, Bazel must
+# propagate that exit code to the caller.
+#
+# Approach: Build and run a program that calls `IO.Process.exit 42`, then
+# verify the exit code is 42.
+#
+# Why this matters: Without proper exit code propagation, build scripts and
+# CI systems can't detect when Lean programs fail.
+lean_binary(
+    name = "exit_test",
+    src = "ExitTest.lean",
+)
+
+# Test: Module naming with BUILD at workspace root, source in subdirectory
+#
+# Requirement: When a BUILD file at the workspace root references a source file
+# in a subdirectory, the module name must be derived from the workspace-relative
+# path, not just the filename.
+#
+# Approach: Reference subdir/inner/Nested.lean from this BUILD file. The module
+# name should be "subdir.inner.Nested", not just "Nested".
+#
+# Why this matters: Correct module naming is essential for imports. If module
+# names don't match the directory structure, cross-module imports will fail.
+lean_binary(
+    name = "nested_module_test",
+    src = "subdir/inner/Nested.lean",
+)

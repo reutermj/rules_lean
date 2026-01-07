@@ -1,0 +1,10 @@
+# Test fixtures for rules_lean tests
+
+load(":mock_toolchain.bzl", "declare_mock_toolchain")
+
+exports_files([
+    "Main.lean",
+    "InvalidExtension.txt",
+])
+
+declare_mock_toolchain(name = "mock_lean_toolchain")
