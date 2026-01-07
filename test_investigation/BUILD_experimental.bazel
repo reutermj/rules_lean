@@ -1,0 +1,14 @@
+# Test build file for experimental workspace root approach
+#
+# Usage:
+#   1. Copy this to BUILD.bazel (replacing the existing one)
+#   2. bazel build //test_investigation:error_test 2>&1 | tee output.txt
+#   3. Check error messages - should show "ErrorTest.lean:4:21" instead of
+#      "bazel-out/.../test_investigation_lean_src/test_investigation/ErrorTest.lean:4:21"
+
+load("//lean/private:rules_experimental.bzl", "lean_binary_experimental")
+
+lean_binary_experimental(
+    name = "error_test",
+    src = "ErrorTest.lean",
+)

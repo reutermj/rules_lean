@@ -1,0 +1,6 @@
+load("//lean:defs.bzl", "lean_binary")
+
+lean_binary(
+    name = "error_test",
+    src = "ErrorTest.lean",
+)
