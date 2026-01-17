@@ -24,11 +24,25 @@ def declare_mock_toolchain(name):
         executable = True,
     )
 
+    # Empty filegroup for mock headers
+    native.filegroup(
+        name = name + "_mock_headers",
+        srcs = [],
+    )
+
+    # Empty filegroup for mock libs
+    native.filegroup(
+        name = name + "_mock_libs",
+        srcs = [],
+    )
+
     lean_toolchain(
         name = name + "_toolchain",
         lean = name + "_mock_lean",
         leanc = name + "_mock_leanc",
         version = "4.12.0-mock",
+        headers = name + "_mock_headers",
+        libs = name + "_mock_libs",
         visibility = ["//visibility:public"],
     )
 

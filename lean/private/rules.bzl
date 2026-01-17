@@ -1,4 +1,6 @@
 """Implementation of Lean build rules."""
+load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 
 # Module naming and Lean's --root flag
 # =====================================
@@ -82,9 +84,16 @@ def _lean_compile(ctx, src, lean, c_file):
     return src_copy
 
 def _lean_binary_impl(ctx):
-    toolchain = ctx.toolchains["@rules_lean//lean:toolchain_type"]
-    lean = toolchain.lean
-    leanc = toolchain.leanc
+    lean_toolchain = ctx.toolchains["@rules_lean//lean:toolchain_type"]
+    lean = lean_toolchain.lean
+
+    cc_toolchain = find_cc_toolchain(ctx)
+    feature_configuration = cc_common.configure_features(
+        ctx = ctx,
+        cc_toolchain = cc_toolchain,
+        requested_features = ctx.features,
+        unsupported_features = ctx.disabled_features,
+    )
 
     src = ctx.file.src
     if not src.path.endswith(".lean"):
@@ -93,31 +102,113 @@ def _lean_binary_impl(ctx):
     # Output files
     name = ctx.label.name
     c_file = ctx.actions.declare_file(name + ".c")
-    executable = ctx.actions.declare_file(name)
 
     # Compile .lean to .c
     _lean_compile(ctx, src, lean, c_file)
 
-    # Link .c to executable using leanc
-    link_args = ctx.actions.args()
-    link_args.add("-o")
-    link_args.add(executable)
-    link_args.add(c_file)
+    # Compile .c to .o using CC toolchain
+    # Lean-generated C code contains unused variables (e.g., `lean_object* in;`)
+    # that are artifacts of the code generator. Suppress -Wunused-variable.
+    _compilation_context, compilation_outputs = cc_common.compile(
+        actions = ctx.actions,
+        feature_configuration = feature_configuration,
+        cc_toolchain = cc_toolchain,
+        srcs = [c_file],
+        includes = [lean_toolchain.lean_include],
+        additional_inputs = lean_toolchain.headers.to_list(),
+        name = name,
+        user_compile_flags = ["-Wno-unused-variable"],
+    )
 
-    ctx.actions.run(
-        mnemonic = "LeanLink",
-        executable = leanc,
-        arguments = [link_args],
-        inputs = [c_file],
-        outputs = [executable],
-        tools = [leanc],
+    # Link .o to executable with Lean runtime libraries
+    #
+    # Library search paths for Lean distribution
+    lib_paths = [
+        "-L" + lean_toolchain.lean_lib,
+        "-L" + lean_toolchain.support_lib,
+    ]
+
+    # Lean runtime libraries with circular dependency handling
+    #
+    # --start-group/--end-group tell the linker to iterate until all symbols
+    # resolve, handling circular dependencies between libraries. Without this,
+    # link order would matter and some symbols might not be found.
+    #
+    # libleancpp.a and libLean.a have mutual dependencies (C++ runtime calls
+    # into Lean runtime and vice versa), as do libInit.a and libleanrt.a.
+    lean_runtime_libs = [
+        "-Wl,--start-group",
+        "-lleancpp",
+        "-lLean",
+        "-Wl,--end-group",
+        "-lStd",
+        "-Wl,--start-group",
+        "-lInit",
+        "-lleanrt",
+        "-Wl,--end-group",
+    ]
+
+    # Static C++ runtime from Lean distribution
+    #
+    # Lean's libleancpp.a is compiled with clang/libc++ and uses the libc++ ABI
+    # (std::__1:: namespace). We must link against the libc++ from Lean's
+    # distribution, not the system's libstdc++.
+    #
+    # -Bstatic forces static linking for these specific libraries, ensuring
+    # the binary doesn't depend on system libc++.so at runtime.
+    # -Bdynamic restores default behavior for subsequent libraries.
+    cxx_runtime_libs = [
+        "-Wl,-Bstatic",
+        "-lc++",
+        "-lc++abi",
+    ]
+
+    # Static support libraries from Lean distribution
+    #
+    # GMP (arbitrary precision arithmetic) and libuv (async I/O) are bundled
+    # with Lean. Link statically to avoid runtime dependencies.
+    support_libs = [
+        "-lgmp",
+        "-luv",
+        "-Wl,-Bdynamic",
+    ]
+
+    # System libraries (dynamically linked)
+    system_libs = [
+        "-lm",
+        "-lpthread",
+        "-ldl",
+        "-lrt",
+    ]
+
+    link_flags = lib_paths + lean_runtime_libs + cxx_runtime_libs + support_libs + system_libs
+
+    # Link object files into final executable
+    #
+    # user_link_flags: Passed to the linker command line. These specify library
+    # search paths (-L) and libraries to link (-l). The linker resolves -l flags
+    # by searching -L paths for matching .a/.so files.
+    #
+    # additional_inputs: Files that must exist for the action to succeed, but
+    # aren't automatically discovered by the linker. The .a files referenced by
+    # -l flags must be declared here so Bazel knows to make them available in
+    # the sandbox during linking.
+    linking_outputs = cc_common.link(
+        actions = ctx.actions,
+        feature_configuration = feature_configuration,
+        cc_toolchain = cc_toolchain,
+        compilation_outputs = compilation_outputs,
+        output_type = "executable",
+        name = name,
+        user_link_flags = link_flags,
+        additional_inputs = lean_toolchain.libs.to_list(),
     )
 
     return [
         DefaultInfo(
-            executable = executable,
-            files = depset([executable]),
-            runfiles = ctx.runfiles(files = [executable]),
+            executable = linking_outputs.executable,
+            files = depset([linking_outputs.executable]),
+            runfiles = ctx.runfiles(files = [linking_outputs.executable]),
         ),
     ]
 
@@ -129,7 +220,11 @@ lean_binary = rule(
             allow_single_file = [".lean"],
             mandatory = True,
         ),
+        "_cc_toolchain": attr.label(
+            default = Label("@bazel_tools//tools/cpp:current_cc_toolchain"),
+        ),
     },
     executable = True,
-    toolchains = ["@rules_lean//lean:toolchain_type"],
+    toolchains = ["@rules_lean//lean:toolchain_type"] + use_cc_toolchain(),
+    fragments = ["cpp"],
 )
