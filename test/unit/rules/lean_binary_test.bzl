@@ -74,26 +74,16 @@ def _test_lean_binary_has_compile_action_impl(env, target):
     compile_actions = [a for a in actions if a.mnemonic == "LeanCompile"]
     env.expect.that_int(len(compile_actions)).equals(1)
 
-# Test: lean_binary registers a LeanLink action
+# Test: lean_binary registers CC compile and link actions
 #
-# Requirement: The rule must register a LeanLink action that links the compiled
-# C code with the Lean runtime to produce the final executable.
+# Requirement: The rule must use the CC toolchain for compiling C code and
+# linking the final executable with Lean runtime libraries.
 #
-# Approach: Create a lean_binary target and verify exactly one action with
-# mnemonic "LeanLink" exists in the action graph.
+# Approach: Create a lean_binary target and verify that CC toolchain actions
+# exist (CppCompile for .c to .o, CppLink for linking).
 #
-# Why this matters: Without this action, compiled C code won't be linked into
-# an executable. The mnemonic appears in build logs for debugging link failures:
-#
-#   $ bazel aquery //:hello --output=text | grep -E "^(action|  Mnemonic)"
-#   action 'LeanCompile hello.c'
-#     Mnemonic: LeanCompile
-#   action 'LeanLink hello'
-#     Mnemonic: LeanLink
-#
-#   $ bazel build //:hello --subcommands
-#   SUBCOMMAND: # //:hello [action 'LeanCompile hello.c', ... mnemonic: LeanCompile]
-#   SUBCOMMAND: # //:hello [action 'LeanLink hello', ... mnemonic: LeanLink]
+# Why this matters: Using the CC toolchain enables cross-compilation and
+# integration with other Bazel C/C++ rules.
 def _test_lean_binary_has_link_action(name):
     lean_binary(
         name = name + "_subject",
@@ -110,8 +100,8 @@ def _test_lean_binary_has_link_action(name):
 def _test_lean_binary_has_link_action_impl(env, target):
     actions = target.actions
 
-    # Find LeanLink action
-    link_actions = [a for a in actions if a.mnemonic == "LeanLink"]
+    # Find CppLink action (from cc_common.link)
+    link_actions = [a for a in actions if a.mnemonic == "CppLink"]
     env.expect.that_int(len(link_actions)).equals(1)
 
 # Test: LeanCompile action includes source file as input
@@ -181,13 +171,13 @@ def _test_lean_binary_compile_action_outputs_c_file_impl(env, target):
     output_extensions = [f.extension for f in compile_action.outputs.to_list()]
     env.expect.that_collection(output_extensions).contains("c")
 
-# Test: LeanLink action produces the final executable
+# Test: CppLink action produces the final executable
 #
-# Requirement: The link action must produce exactly one output file - the final
-# executable binary named after the target.
+# Requirement: The link action must produce an executable binary named after
+# the target.
 #
-# Approach: Create a lean_binary target, find the LeanLink action, and verify it
-# has exactly one output whose basename matches the target name.
+# Approach: Create a lean_binary target, find the CppLink action, and verify
+# it produces an output whose basename matches the target name.
 #
 # Why this matters: This is the final artifact users care about. The output name
 # must match the target name so `bazel run //:foo` executes the right binary.
@@ -206,15 +196,11 @@ def _test_lean_binary_link_action_produces_executable(name):
 
 def _test_lean_binary_link_action_produces_executable_impl(env, target):
     actions = target.actions
-    link_actions = [a for a in actions if a.mnemonic == "LeanLink"]
+    link_actions = [a for a in actions if a.mnemonic == "CppLink"]
     link_action = link_actions[0]
 
-    # The output should be the executable (no extension on Linux)
-    outputs = link_action.outputs.to_list()
-    env.expect.that_int(len(outputs)).equals(1)
-
-    # Output name should match the target name
-    output_basenames = [f.basename for f in outputs]
+    # Output should include an executable named after the target
+    output_basenames = [f.basename for f in link_action.outputs.to_list()]
     env.expect.that_collection(output_basenames).contains("test_lean_binary_link_action_produces_executable_subject")
 
 # Test: Source copy preserves workspace-relative path for module naming

@@ -5,6 +5,19 @@ module(
 
 bazel_dep(name = "bazel_skylib", version = "1.5.0")
 bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_cc", version = "0.2.16")
+
+bazel_dep(name = "toolchains_cc", dev_dependency = True)
+git_override(
+    module_name = "toolchains_cc",
+    commit = "5b523bac537c5cf3ae9b0bea9fd29b227303de10",
+    remote = "https://github.com/reutermj/toolchains_cc",
+)
+
+register_toolchains(
+    "@toolchains_cc",
+    dev_dependency = True,
+)
 
 bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.1", dev_dependency = True)
 bazel_dep(name = "rules_testing", version = "0.9.0", dev_dependency = True)

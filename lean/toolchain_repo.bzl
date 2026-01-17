@@ -10,11 +10,28 @@ def declare_lean_toolchain(name, version, platform):
         version: Lean version string (e.g., "4.12.0")
         platform: Lean platform string (e.g., "linux", "darwin_aarch64")
     """
-    lean_path = "lean-{}-{}/bin/lean".format(version, platform)
-    leanc_path = "lean-{}-{}/bin/leanc".format(version, platform)
+    dist_dir = "lean-{}-{}".format(version, platform)
+    lean_path = "{}/bin/lean".format(dist_dir)
+    leanc_path = "{}/bin/leanc".format(dist_dir)
 
     # Export the raw files for use in toolchain provider
     native.exports_files([lean_path, leanc_path])
+
+    # Create filegroup for Lean headers (needed for cc_common.compile inputs)
+    native.filegroup(
+        name = "lean_headers",
+        srcs = native.glob(["{}/include/**".format(dist_dir)]),
+    )
+
+    # Create filegroup for Lean libraries (needed for cc_common.link inputs)
+    # Includes Lean runtime libs (lib/lean/*.a) and support libs (lib/*.a)
+    native.filegroup(
+        name = "lean_libs",
+        srcs = native.glob([
+            "{}/lib/lean/*.a".format(dist_dir),
+            "{}/lib/*.a".format(dist_dir),
+        ]),
+    )
 
     # Aliases for direct invocation: bazel run @...//:lean -- --version
     native.alias(
@@ -32,6 +49,8 @@ def declare_lean_toolchain(name, version, platform):
         lean = ":lean",
         leanc = ":leanc",
         version = version,
+        headers = ":lean_headers",
+        libs = ":lean_libs",
         visibility = ["//visibility:public"],
     )
 

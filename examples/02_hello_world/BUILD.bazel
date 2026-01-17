@@ -1,4 +1,5 @@
 load("@rules_lean//lean:defs.bzl", "lean_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Test: Basic lean_binary compilation and execution
 #
@@ -42,4 +43,39 @@ lean_binary(
 lean_binary(
     name = "nested_module_test",
     src = "subdir/inner/Nested.lean",
+)
+
+# Test: Verify lean_binary produces statically-linked executables
+#
+# Requirement: Lean binaries should only depend on basic system libraries,
+# not on Lean-specific shared libraries or libc++.
+#
+# Approach: Run ldd on the hello binary and verify no forbidden dependencies.
+#
+# Why this matters: Static linking ensures binaries are portable and don't
+# require users to install Lean runtime libraries.
+sh_test(
+    name = "verify_static_linking_test",
+    srcs = ["verify_static_linking_test.sh"],
+    args = ["$(location :hello)"],
+    data = [":hello"],
+)
+
+# Test: Document binary characteristics for hermetic toolchain verification
+#
+# Requirement: When a hermetic CC toolchain (toolchains_cc) is registered,
+# builds should use its compiler and sysroot, not the system compiler.
+#
+# Approach: Examine the built binary's characteristics (compiler info, library
+# dependencies) to document the build configuration.
+#
+# Why this matters: Hermetic toolchains ensure reproducible builds across
+# different machines regardless of their system libraries.
+#
+# Note: Full hermetic verification requires inspecting build commands with -s flag.
+sh_test(
+    name = "verify_hermetic_toolchain_test",
+    srcs = ["verify_hermetic_toolchain_test.sh"],
+    args = ["$(location :hello)"],
+    data = [":hello"],
 )
