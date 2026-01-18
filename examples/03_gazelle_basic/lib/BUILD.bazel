@@ -1,0 +1,8 @@
+load("@rules_lean//lean:defs.bzl", "lean_module")
+
+# This file will be updated by Gazelle
+
+lean_module(
+    name = "lib.Greeter",
+    src = "Greeter.lean",
+)
