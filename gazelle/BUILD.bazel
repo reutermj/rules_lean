@@ -1,0 +1,35 @@
+load("@gazelle//:def.bzl", "gazelle_binary")
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gazelle_lib",
+    srcs = [
+        "config.go",
+        "generate.go",
+        "kinds.go",
+        "language.go",
+        "parser.go",
+        "resolve.go",
+    ],
+    importpath = "github.com/reutermj/rules_lean/gazelle",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@gazelle//config:go_default_library",
+        "@gazelle//label:go_default_library",
+        "@gazelle//language:go_default_library",
+        "@gazelle//repo:go_default_library",
+        "@gazelle//resolve:go_default_library",
+        "@gazelle//rule:go_default_library",
+    ],
+)
+
+# Gazelle binary with Lean language support
+gazelle_binary(
+    name = "gazelle_bin",
+    languages = [
+        "@gazelle//language/proto",
+        "@gazelle//language/go",
+        ":gazelle_lib",
+    ],
+    visibility = ["//visibility:public"],
+)

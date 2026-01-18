@@ -1,0 +1,26 @@
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_lean//lean:defs.bzl", "lake_manifest", "lean_binary", "lean_module")
+
+# gazelle:lean_external Cli@lean_deps
+
+# Gazelle target for updating BUILD files
+gazelle(
+    name = "gazelle",
+    gazelle = "@rules_lean//gazelle:gazelle_bin",
+)
+
+lean_module(
+    name = "ExampleCli",
+    src = "ExampleCli.lean",
+    visibility = ["//visibility:public"],
+    deps = ["@lean_deps//:Cli"],
+)
+
+# Manage lake-manifest.json similar to pip_compile
+# Run: bazel run //:lake_manifest.update
+# Test: bazel test //:lake_manifest_test
+lake_manifest(
+    name = "lake_manifest",
+    lakefile = "lakefile.toml",
+    manifest = "lake-manifest.json",
+)

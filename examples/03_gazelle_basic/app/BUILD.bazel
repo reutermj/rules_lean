@@ -1,0 +1,8 @@
+load("@rules_lean//lean:defs.bzl", "lean_module")
+
+lean_module(
+    name = "Runner",
+    src = "Runner.lean",
+    visibility = ["//visibility:public"],
+    deps = ["//lib:Greeter"],
+)

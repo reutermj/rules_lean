@@ -1,6 +1,7 @@
-"""Bzlmod extensions for Lean toolchains."""
+"""Bzlmod extensions for Lean toolchains and dependencies."""
 
 load("//lean:repositories.bzl", "lean_download")
+load("//lean/private:deps.bzl", "lean_deps")
 
 _LEAN_PLATFORMS = {
     "linux-x86_64": "linux",
@@ -10,7 +11,8 @@ _LEAN_PLATFORMS = {
     "windows-x86_64": "windows",
 }
 
-def _toolchain_impl(ctx):
+def _lean_impl(ctx):
+    # Handle toolchain tags
     for mod in ctx.modules:
         for toolchain in mod.tags.toolchain:
             version = toolchain.version
@@ -23,15 +25,41 @@ def _toolchain_impl(ctx):
                     sha256 = "",
                 )
 
+    # Handle deps tags
+    for mod in ctx.modules:
+        for deps in mod.tags.deps:
+            lean_deps(
+                name = deps.name,
+                manifest = deps.manifest,
+                lakefile = deps.lakefile,
+            )
+
 _toolchain_tag = tag_class(
     attrs = {
         "version": attr.string(mandatory = True),
     },
 )
 
+_deps_tag = tag_class(
+    attrs = {
+        "name": attr.string(mandatory = True),
+        "manifest": attr.label(
+            mandatory = True,
+            allow_single_file = [".json"],
+            doc = "Path to lake-manifest.json",
+        ),
+        "lakefile": attr.label(
+            mandatory = True,
+            allow_single_file = True,
+            doc = "Path to lakefile.toml or lakefile.lean",
+        ),
+    },
+)
+
 lean = module_extension(
-    implementation = _toolchain_impl,
+    implementation = _lean_impl,
     tag_classes = {
         "toolchain": _toolchain_tag,
+        "deps": _deps_tag,
     },
 )

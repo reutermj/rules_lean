@@ -1,0 +1,14 @@
+load("@rules_lean//lean:defs.bzl", "lean_module")
+
+lean_module(
+    name = "Greeter",
+    src = "Greeter.lean",
+    visibility = ["//visibility:public"],
+    deps = [":Utils"],
+)
+
+lean_module(
+    name = "Utils",
+    src = "Utils.lean",
+    visibility = ["//visibility:public"],
+)
