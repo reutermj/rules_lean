@@ -1,0 +1,11 @@
+name = "example_cli"
+version = "0.1.0"
+defaultTargets = ["ExampleCli"]
+
+[[require]]
+name = "Cli"
+scope = "leanprover"
+rev = "main"
+
+[[lean_lib]]
+name = "ExampleCli"

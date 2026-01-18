@@ -697,15 +697,533 @@ lean_module(
 
 ### Phase G4: External Dependencies
 
-**Goal**: Support external repositories (e.g., Mathlib).
+**Goal**: Support external repositories by using Lake to fetch dependencies and generating Bazel BUILD files for them.
 
-**Scope**:
-- `gazelle:lean_external` directive
-- Repository → label mapping
-- Lake manifest integration (optional)
+**Test Package**: [lean4-cli](https://github.com/leanprover/lean4-cli) - A small CLI argument parsing library with no transitive dependencies:
+- 3 main modules: `Cli`, `Cli.Basic`, `Cli.Extensions`
+- 2 test modules: `CliTest.Example`, `CliTest.Tests`
+- Lean 4.27.0-rc1 toolchain
+
+#### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     User's Workspace                                         │
+│                                                                              │
+│  lakefile.toml (or lakefile.lean)    lake-manifest.json                      │
+│  ─────────────────────────────────   ────────────────────                    │
+│  [[require]]                         Pinned commits for                      │
+│  name = "Cli"                        all transitive deps                     │
+│  scope = "leanprover"                                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     lean_deps Repository Rule                                │
+│                                                                              │
+│  1. Reads lake-manifest.json to get all dependencies                         │
+│  2. Runs `lake update` to download packages to .lake/packages/               │
+│  3. For each package, generates BUILD.bazel with lean_module targets         │
+│  4. Exports @lean_deps//<package>:<module> labels                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     Generated External Repository                            │
+│                                                                              │
+│  @lean_deps//                                                                │
+│  ├── Cli/                                                                    │
+│  │   ├── BUILD.bazel     # lean_module targets for Cli modules               │
+│  │   └── ...             # symlinked source files                            │
+│  └── ...                 # other packages if any                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Lake Integration Strategy
+
+Lake is Lean's native package manager and handles:
+- Git cloning of dependencies
+- Version resolution and pinning via manifest
+- Pre-built release downloads (optional)
+
+Rather than reimplementing this logic in Bazel, we leverage Lake to do what it does best:
+
+1. **User maintains lakefile.toml** - Standard Lean workflow, no Bazel-specific config
+2. **Lake downloads packages** - Repository rule invokes `lake update`
+3. **Gazelle generates BUILD files** - Parse downloaded sources and generate targets
+
+#### Repository Rule: `lean_deps`
+
+```python
+# lean/extensions.bzl
+
+lean_deps = repository_rule(
+    implementation = _lean_deps_impl,
+    attrs = {
+        "manifest": attr.label(
+            doc = "Path to lake-manifest.json",
+            allow_single_file = [".json"],
+            mandatory = True,
+        ),
+        "lakefile": attr.label(
+            doc = "Path to lakefile.toml or lakefile.lean",
+            allow_single_file = True,
+            mandatory = True,
+        ),
+        "_gazelle": attr.label(
+            default = "@rules_lean//gazelle:gazelle_lean",
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+    environ = ["HOME"],  # Lake may need HOME for git
+)
+
+def _lean_deps_impl(ctx):
+    # 1. Copy lakefile and manifest to repository directory
+    ctx.symlink(ctx.attr.lakefile, "lakefile.toml")
+    ctx.symlink(ctx.attr.manifest, "lake-manifest.json")
+
+    # 2. Get lean toolchain path
+    lean_toolchain = ctx.path(Label("@lean_toolchains//:lean"))
+    lake_bin = lean_toolchain.dirname.get_child("lake")
+
+    # 3. Run lake update to download all dependencies
+    result = ctx.execute(
+        [lake_bin, "update"],
+        environment = {
+            "HOME": ctx.os.environ.get("HOME", "/tmp"),
+            "LAKE_HOME": str(ctx.path(".")),
+        },
+        timeout = 600,  # 10 min timeout for large deps like mathlib
+    )
+    if result.return_code != 0:
+        fail("lake update failed: " + result.stderr)
+
+    # 4. Parse manifest to get list of packages
+    manifest = json.decode(ctx.read("lake-manifest.json"))
+
+    # 5. For each package, generate BUILD.bazel
+    for pkg in manifest["packages"]:
+        pkg_name = pkg["name"]
+        pkg_dir = ".lake/packages/" + pkg_name
+
+        # Run gazelle on the package directory
+        result = ctx.execute(
+            [ctx.attr._gazelle, "-mode", "fix", pkg_dir],
+            timeout = 120,
+        )
+
+        # Create top-level alias for the package
+        _write_package_build(ctx, pkg_name, pkg_dir)
+
+    # 6. Write root BUILD.bazel that exports all packages
+    _write_root_build(ctx, manifest["packages"])
+```
+
+#### Manifest Schema (lake-manifest.json)
+
+Lake manifest files contain pinned versions of all transitive dependencies:
+
+```json
+{
+  "version": "1.1.0",
+  "packagesDir": ".lake/packages",
+  "name": "my-project",
+  "packages": [
+    {
+      "type": "git",
+      "name": "mathlib",
+      "scope": "leanprover-community",
+      "url": "https://github.com/leanprover-community/mathlib4",
+      "rev": "abc123...",  // Exact commit SHA
+      "inputRev": "v4.15.0",  // Requested version
+      "inherited": false,
+      "configFile": "lakefile.toml"
+    },
+    {
+      "type": "git",
+      "name": "batteries",
+      "url": "https://github.com/leanprover-community/batteries",
+      "rev": "def456...",
+      "inherited": true,  // Transitive dep of mathlib
+      ...
+    }
+  ]
+}
+```
+
+#### Generated BUILD Structure
+
+For each external package, generate BUILD.bazel with lean_module targets:
+
+```python
+# @lean_deps//Cli/BUILD.bazel (generated)
+load("@rules_lean//lean:defs.bzl", "lean_module")
+
+# One lean_module per .lean file in the package
+lean_module(
+    name = "Cli",
+    src = "Cli.lean",
+    deps = [":Cli.Basic", ":Cli.Extensions"],
+    visibility = ["//visibility:public"],
+)
+
+lean_module(
+    name = "Cli.Basic",
+    src = "Cli/Basic.lean",
+    visibility = ["//visibility:public"],
+)
+
+lean_module(
+    name = "Cli.Extensions",
+    src = "Cli/Extensions.lean",
+    deps = [":Cli.Basic"],
+    visibility = ["//visibility:public"],
+)
+```
+
+#### Module Extension API
+
+Users configure external deps via module extension:
+
+```python
+# MODULE.bazel
+lean = use_extension("@rules_lean//lean:extensions.bzl", "lean")
+
+# Register external dependencies from Lake manifest
+lean.deps(
+    name = "lean_deps",
+    manifest = "//:lake-manifest.json",
+    lakefile = "//:lakefile.toml",
+)
+
+use_repo(lean, "lean_deps")
+```
+
+#### Gazelle Import Resolution Updates
+
+Update resolve.go to handle imports from external packages:
+
+```go
+func (l *leanLang) resolveImport(
+    c *config.Config,
+    ix *resolve.RuleIndex,
+    moduleName string,
+    from label.Label,
+) string {
+    // 1. Check stdlib (unchanged)
+    if isStdlibImport(moduleName) {
+        return ""
+    }
+
+    // 2. Check local index (unchanged)
+    if matches := ix.FindRulesByImport(...); len(matches) > 0 {
+        return matches[0].Label.String()
+    }
+
+    // 3. Check external packages from Lake manifest
+    cfg := getLeanConfig(c)
+    for _, pkg := range cfg.LakePackages {
+        // Check if import starts with package's module prefix
+        // e.g., "Cli" or "Cli.Basic" matches package with ModuleRoot "Cli"
+        if strings.HasPrefix(moduleName, pkg.ModuleRoot+".") || moduleName == pkg.ModuleRoot {
+            // Map to @lean_deps//<package>:<module>
+            // e.g., import Cli.Basic -> @lean_deps//Cli:Cli.Basic
+            return "@lean_deps//" + pkg.Name + ":" + moduleName
+        }
+    }
+
+    return ""
+}
+```
+
+#### Pre-built Release Support
+
+For large packages like Mathlib, building from source is slow. Lake supports pre-built releases:
+
+```python
+def _lean_deps_impl(ctx):
+    # ... after lake update ...
+
+    # Check for pre-built .olean files
+    for pkg in manifest["packages"]:
+        release_dir = ".lake/packages/" + pkg["name"] + "/.lake/build"
+        if ctx.path(release_dir).exists:
+            # Package has pre-built artifacts - use them
+            _import_prebuilt_oleans(ctx, pkg)
+        else:
+            # Need to build from source - generate lean_module targets
+            _generate_build_file(ctx, pkg)
+```
+
+#### Scope
+
+- `lean_deps` repository rule that reads lake-manifest.json
+- Lake integration for downloading packages
+- BUILD.bazel generation for external packages
+- Gazelle resolver updates for `@lean_deps//` imports
+- Module extension API for users
+
+#### Implementation Sub-phases
+
+**G4.1: Repository Rule Skeleton**
+- Implement `lean_deps` repository rule
+- Read and parse lake-manifest.json
+- Invoke `lake update` to download packages
+
+**G4.2: BUILD Generation for External Packages**
+- Scan downloaded package sources for .lean files
+- Parse imports using existing parser
+- Generate lean_module targets with deps
+
+**G4.3: Gazelle Resolver Integration**
+- Load Lake manifest into Gazelle config
+- Map external imports to `@lean_deps//pkg:Module` labels
+- Handle transitive dependencies between external packages
+
+**G4.4: Pre-built Release Support (Optional)**
+- Detect when packages have pre-built .olean/.o files
+- Import artifacts directly instead of compiling from source
+- Significant build time improvement for Mathlib
 
 **Success Criteria**:
-- Projects depending on external Lean packages can be built
+- Projects with `lakefile.toml` + `lake-manifest.json` can build with Bazel
+- Imports like `import Cli` and `import Cli.Basic` resolve to `@lean_deps//Cli:Cli` and `@lean_deps//Cli:Cli.Basic`
+- External package modules are cached and reusable across builds
+- Test with lean4-cli: user project can `import Cli` and use CLI parsing functionality
+
+### Phase G4.5: Manifest Generation (`lake_manifest` rule)
+
+**Goal**: Provide a `pip_compile`-style rule for generating/updating `lake-manifest.json`.
+
+#### Motivation
+
+Currently, users must run `lake update` outside of Bazel to generate the manifest file. This creates friction:
+- Requires Lake to be installed separately
+- Easy to forget to update the manifest
+- No Bazel integration for the workflow
+
+Similar to how `pip_compile` in rules_python provides `bazel run //:requirements.update`, we provide `lake_manifest` with an `.update` target.
+
+#### User Workflow
+
+```python
+# BUILD.bazel
+load("@rules_lean//lean:defs.bzl", "lake_manifest")
+
+lake_manifest(
+    name = "lake_manifest",
+    lakefile = "lakefile.toml",
+    manifest = "lake-manifest.json",
+)
+```
+
+```bash
+# Update the manifest when dependencies change
+bazel run //:lake_manifest.update
+
+# Validate manifest is up-to-date (useful in CI)
+bazel test //:lake_manifest_test
+```
+
+#### Implementation
+
+The rule generates two targets:
+
+1. **`lake_manifest`** - A filegroup containing the manifest (for use as dependency)
+2. **`lake_manifest.update`** - An executable that runs `lake update` and writes the manifest
+
+```python
+# lean/private/lake_manifest.bzl
+
+def _lake_manifest_update_impl(ctx):
+    """Implementation for the .update target that regenerates the manifest."""
+
+    # Create a shell script that:
+    # 1. Changes to the source directory (where lakefile.toml lives)
+    # 2. Runs `lake update`
+    # 3. Copies the generated manifest back to the source tree
+
+    script = ctx.actions.declare_file(ctx.label.name + ".sh")
+
+    # Get the Lake binary from the toolchain
+    lean_toolchain = ctx.toolchains["@rules_lean//lean:toolchain_type"]
+    lake = lean_toolchain.lake
+
+    ctx.actions.write(
+        output = script,
+        content = """\
+#!/bin/bash
+set -euo pipefail
+
+LAKEFILE_DIR=$(dirname "{lakefile}")
+cd "$BUILD_WORKSPACE_DIRECTORY/$LAKEFILE_DIR"
+
+# Run lake update
+"{lake}" update
+
+echo "Updated {manifest}"
+""".format(
+            lakefile = ctx.file.lakefile.short_path,
+            lake = lake.short_path,
+            manifest = ctx.file.manifest.short_path,
+        ),
+        is_executable = True,
+    )
+
+    return [DefaultInfo(
+        executable = script,
+        runfiles = ctx.runfiles(files = [lake, ctx.file.lakefile]),
+    )]
+
+lake_manifest_update = rule(
+    implementation = _lake_manifest_update_impl,
+    attrs = {
+        "lakefile": attr.label(
+            allow_single_file = True,
+            mandatory = True,
+        ),
+        "manifest": attr.label(
+            allow_single_file = [".json"],
+            mandatory = True,
+        ),
+    },
+    executable = True,
+    toolchains = ["@rules_lean//lean:toolchain_type"],
+)
+
+def _lake_manifest_test_impl(ctx):
+    """Test that validates the manifest is up-to-date."""
+
+    script = ctx.actions.declare_file(ctx.label.name + ".sh")
+
+    lean_toolchain = ctx.toolchains["@rules_lean//lean:toolchain_type"]
+    lake = lean_toolchain.lake
+
+    ctx.actions.write(
+        output = script,
+        content = """\
+#!/bin/bash
+set -euo pipefail
+
+# Create temp directory for validation
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+# Copy lakefile to temp
+cp "{lakefile}" "$TMPDIR/lakefile.toml"
+
+cd "$TMPDIR"
+
+# Run lake update
+"{lake}" update 2>/dev/null
+
+# Compare generated manifest with checked-in version
+if ! diff -q lake-manifest.json "{manifest}" > /dev/null 2>&1; then
+    echo "ERROR: lake-manifest.json is out of date!"
+    echo "Run: bazel run //{pkg}:{name}.update"
+    exit 1
+fi
+
+echo "lake-manifest.json is up to date"
+""".format(
+            lakefile = ctx.file.lakefile.short_path,
+            manifest = ctx.file.manifest.short_path,
+            lake = lake.short_path,
+            pkg = ctx.label.package,
+            name = ctx.label.name.removesuffix("_test"),
+        ),
+        is_executable = True,
+    )
+
+    return [DefaultInfo(
+        executable = script,
+        runfiles = ctx.runfiles(files = [lake, ctx.file.lakefile, ctx.file.manifest]),
+    )]
+
+lake_manifest_test = rule(
+    implementation = _lake_manifest_test_impl,
+    attrs = {
+        "lakefile": attr.label(
+            allow_single_file = True,
+            mandatory = True,
+        ),
+        "manifest": attr.label(
+            allow_single_file = [".json"],
+            mandatory = True,
+        ),
+    },
+    test = True,
+    toolchains = ["@rules_lean//lean:toolchain_type"],
+)
+
+def lake_manifest(name, lakefile, manifest, **kwargs):
+    """Macro that creates targets for managing Lake manifest files.
+
+    Similar to pip_compile in rules_python, this creates:
+    - {name}: A filegroup containing the manifest
+    - {name}.update: Executable to regenerate the manifest
+    - {name}_test: Test to validate manifest is up-to-date
+
+    Args:
+        name: Base name for the targets
+        lakefile: Label for lakefile.toml
+        manifest: Label for lake-manifest.json
+        **kwargs: Additional arguments passed to all targets
+
+    Example:
+        lake_manifest(
+            name = "lake_manifest",
+            lakefile = "lakefile.toml",
+            manifest = "lake-manifest.json",
+        )
+
+        # Update manifest: bazel run //:lake_manifest.update
+        # Validate in CI: bazel test //:lake_manifest_test
+    """
+
+    # Main target - filegroup with the manifest
+    native.filegroup(
+        name = name,
+        srcs = [manifest],
+        **kwargs
+    )
+
+    # Update target
+    lake_manifest_update(
+        name = name + ".update",
+        lakefile = lakefile,
+        manifest = manifest,
+        **kwargs
+    )
+
+    # Test target for CI
+    lake_manifest_test(
+        name = name + "_test",
+        lakefile = lakefile,
+        manifest = manifest,
+        **kwargs
+    )
+```
+
+#### Comparison with pip_compile
+
+| Feature | pip_compile | lake_manifest |
+|---------|-------------|---------------|
+| Input file | requirements.in / pyproject.toml | lakefile.toml |
+| Output file | requirements.txt | lake-manifest.json |
+| Update command | `bazel run //:requirements.update` | `bazel run //:lake_manifest.update` |
+| Validation test | `bazel test //:requirements_test` | `bazel test //:lake_manifest_test` |
+| Resolver | pip-tools | lake update |
+| Lock format | Package==version with hashes | Git commit SHAs |
+
+#### Success Criteria
+
+- `bazel run //:lake_manifest.update` regenerates lake-manifest.json
+- `bazel test //:lake_manifest_test` passes when manifest is up-to-date
+- `bazel test //:lake_manifest_test` fails when lakefile.toml has new deps not in manifest
+- Integrates with existing `lean.deps()` module extension
 
 ### Phase G5: Binary Detection
 
@@ -723,13 +1241,20 @@ lean_module(
 
 1. **How to handle `import all` syntax?** - Needs special handling to import all modules from a package.
 
-2. **Lake manifest integration** - Should Gazelle read `lake-manifest.json` for external deps, or use directives?
+2. ~~**Lake manifest integration**~~ - **Resolved in Phase G4**: Use Lake to download packages, generate BUILD files from downloaded sources.
 
 3. **Incremental updates** - How to efficiently update only changed files without re-parsing everything?
 
 4. **Module root configuration** - Best UX for configuring module name prefixes in monorepos?
 
 5. **Generated code** - How to handle imports from Lean files that are themselves generated by other rules?
+
+6. **External package build performance** - Mathlib has ~1M+ lines of code across thousands of modules. Options:
+   - Support pre-built release downloads (Lake's `preferReleaseBuild`)
+   - Implement parallel gazelle processing for large packages
+   - Consider caching generated BUILD files
+
+7. **Lean version compatibility** - External packages may require specific Lean versions. How to handle version mismatches between workspace toolchain and package requirements?
 
 ## Appendix: Lean Import Syntax
 

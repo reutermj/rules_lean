@@ -13,9 +13,10 @@ def declare_lean_toolchain(name, version, platform):
     dist_dir = "lean-{}-{}".format(version, platform)
     lean_path = "{}/bin/lean".format(dist_dir)
     leanc_path = "{}/bin/leanc".format(dist_dir)
+    lake_path = "{}/bin/lake".format(dist_dir)
 
     # Export the raw files for use in toolchain provider
-    native.exports_files([lean_path, leanc_path])
+    native.exports_files([lean_path, leanc_path, lake_path])
 
     # Create filegroup for Lean headers (needed for cc_common.compile inputs)
     native.filegroup(
@@ -44,10 +45,16 @@ def declare_lean_toolchain(name, version, platform):
         actual = leanc_path,
     )
 
+    native.alias(
+        name = "lake",
+        actual = lake_path,
+    )
+
     lean_toolchain(
         name = "toolchain",
         lean = ":lean",
         leanc = ":leanc",
+        lake = ":lake",
         version = version,
         headers = ":lean_headers",
         libs = ":lean_libs",

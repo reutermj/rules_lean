@@ -1,0 +1,40 @@
+module(
+    name = "example_external_deps",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_lean")
+local_path_override(
+    module_name = "rules_lean",
+    path = "../..",
+)
+
+bazel_dep(name = "gazelle", version = "0.47.0")
+bazel_dep(name = "rules_go", version = "0.59.0")
+
+# Hermetic CC toolchain with sysroot for reproducible builds
+bazel_dep(name = "toolchains_cc")
+git_override(
+    module_name = "toolchains_cc",
+    commit = "5b523bac537c5cf3ae9b0bea9fd29b227303de10",
+    remote = "https://github.com/reutermj/toolchains_cc",
+)
+
+register_toolchains("@toolchains_cc")
+
+lean = use_extension("@rules_lean//lean:extensions.bzl", "lean")
+lean.toolchain(version = "4.24.0")
+use_repo(lean, "lean_toolchain_linux_x86_64")
+
+register_toolchains("@lean_toolchain_linux_x86_64//:lean_toolchain")
+
+# External dependencies from Lake manifest
+lean.deps(
+    name = "lean_deps",
+    manifest = "//:lake-manifest.json",
+    lakefile = "//:lakefile.toml",
+)
+use_repo(lean, "lean_deps")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.25.6")

@@ -36,8 +36,24 @@ def _lean_module_compile(ctx, src, lean, olean, ilean, c_file, dep_infos, transi
 
     # See comments in rules.bzl for why we copy the source file.
     # The copy preserves the workspace-relative path for correct module naming.
-    src_copy = ctx.actions.declare_file(ctx.label.name + "_lean_src/" + src.short_path)
-    root_dir = src_copy.path[:-(len(src.short_path) + 1)]
+    # For external repos, short_path starts with "../<repo>/" or "external/<repo>/"
+    # We need to compute a path relative to the repository root for the module name
+    src_short = src.short_path
+
+    # Handle external repository sources - extract just the path within the repo
+    if src_short.startswith("../"):
+        # ../rules_lean++lean+lean_deps/Cli/Basic.lean -> Cli/Basic.lean
+        parts = src_short.split("/", 2)  # ["..", "<repo>", "path/to/file.lean"]
+        if len(parts) >= 3:
+            src_short = parts[2]
+    elif src_short.startswith("external/"):
+        # external/rules_lean++lean+lean_deps/Cli/Basic.lean -> Cli/Basic.lean
+        parts = src_short.split("/", 2)  # ["external", "<repo>", "path/to/file.lean"]
+        if len(parts) >= 3:
+            src_short = parts[2]
+
+    src_copy = ctx.actions.declare_file(ctx.label.name + "_lean_src/" + src_short)
+    root_dir = src_copy.path[:-(len(src_short) + 1)]
 
     # Build LEAN_PATH from dependency oleans
     # LEAN_PATH tells lean where to find .olean files for imports
@@ -124,13 +140,39 @@ def _lean_module_impl(ctx):
             transitive_c_object_depsets.append(info.transitive_c_objects)
 
     # Output files
-    # declare_file paths are relative to the package, so we use basename
-    # e.g., for //lib:Greeter with src lib/Greeter.lean, basename is "Greeter.lean"
-    # This creates bazel-bin/lib/Greeter.olean (not bazel-bin/lib/lib/Greeter.olean)
+    # The olean path must match the module name structure so Lean can find imports.
+    # e.g., module Cli.Basic -> olean at Cli/Basic.olean (relative to output root)
+    #
+    # For local packages like //lib:Greeter, source is lib/Greeter.lean, module is lib.Greeter
+    # but we're in package "lib" so olean should be Greeter.olean (Bazel adds lib/ prefix)
+    #
+    # For external packages like @lean_deps//:Cli.Basic, source is Cli/Basic.lean, module is Cli.Basic
+    # we're in package "" (root) so olean should be Cli/Basic.olean
     name = ctx.label.name
-    src_basename = src.basename.removesuffix(".lean")
-    olean = ctx.actions.declare_file(src_basename + ".olean")
-    ilean = ctx.actions.declare_file(src_basename + ".ilean")
+
+    # Compute the olean path from the source path (which matches module structure)
+    # Handle external repo prefixes
+    src_path = src.short_path
+    if src_path.startswith("../"):
+        parts = src_path.split("/", 2)
+        if len(parts) >= 3:
+            src_path = parts[2]
+    elif src_path.startswith("external/"):
+        parts = src_path.split("/", 2)
+        if len(parts) >= 3:
+            src_path = parts[2]
+
+    # For local packages, strip the package prefix to avoid duplication
+    # e.g., in //lib package, lib/Greeter.lean -> Greeter.olean (not lib/Greeter.olean)
+    pkg_path = ctx.label.package
+    if pkg_path and src_path.startswith(pkg_path + "/"):
+        src_path = src_path[len(pkg_path) + 1:]
+
+    olean_path = src_path.removesuffix(".lean") + ".olean"
+    ilean_path = src_path.removesuffix(".lean") + ".ilean"
+
+    olean = ctx.actions.declare_file(olean_path)
+    ilean = ctx.actions.declare_file(ilean_path)
     c_file = ctx.actions.declare_file(name + ".c")
 
     # Collect transitive oleans for compilation inputs
@@ -168,9 +210,19 @@ def _lean_module_impl(ctx):
         transitive = transitive_c_object_depsets,
     )
 
-    # Module name is derived from the workspace-relative source path
+    # Module name is derived from the source path
+    # For external repos, we strip the repo prefix to get the true module name
     # This matches the Gazelle extension's naming convention
-    module_name = src.short_path.removesuffix(".lean").replace("/", ".")
+    src_path = src.short_path
+    if src_path.startswith("../"):
+        parts = src_path.split("/", 2)
+        if len(parts) >= 3:
+            src_path = parts[2]
+    elif src_path.startswith("external/"):
+        parts = src_path.split("/", 2)
+        if len(parts) >= 3:
+            src_path = parts[2]
+    module_name = src_path.removesuffix(".lean").replace("/", ".")
 
     return [
         DefaultInfo(

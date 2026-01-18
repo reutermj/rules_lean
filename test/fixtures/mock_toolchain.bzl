@@ -24,6 +24,13 @@ def declare_mock_toolchain(name):
         executable = True,
     )
 
+    native.genrule(
+        name = name + "_mock_lake_gen",
+        outs = [name + "_mock_lake"],
+        cmd = "echo '#!/bin/bash\necho mock lake' > $@ && chmod +x $@",
+        executable = True,
+    )
+
     # Empty filegroup for mock headers
     native.filegroup(
         name = name + "_mock_headers",
@@ -40,6 +47,7 @@ def declare_mock_toolchain(name):
         name = name + "_toolchain",
         lean = name + "_mock_lean",
         leanc = name + "_mock_leanc",
+        lake = name + "_mock_lake",
         version = "4.12.0-mock",
         headers = name + "_mock_headers",
         libs = name + "_mock_libs",

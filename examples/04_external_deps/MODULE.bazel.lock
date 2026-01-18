@@ -230,7 +230,7 @@
     "@@rules_lean+//lean:extensions.bzl%lean": {
       "general": {
         "bzlTransitiveDigest": "9IfTB93i89WcXDuzVihtM1JhGFzaFnSYg8OBk0atRi0=",
-        "usagesDigest": "QJk0IWbOFF4BD+JiYBdFVaedLVif2n2kYAd3dJVxcu0=",
+        "usagesDigest": "ySTNmaHpK/I7zg0XcioF0zuUy9dFzdDeS3Tzmw7Z5TM=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -238,7 +238,7 @@
           "lean_toolchain_linux_x86_64": {
             "repoRuleId": "@@rules_lean+//lean:repositories.bzl%lean_download",
             "attributes": {
-              "version": "4.26.0",
+              "version": "4.24.0",
               "platform": "linux",
               "sha256": ""
             }
@@ -246,7 +246,7 @@
           "lean_toolchain_linux_aarch64": {
             "repoRuleId": "@@rules_lean+//lean:repositories.bzl%lean_download",
             "attributes": {
-              "version": "4.26.0",
+              "version": "4.24.0",
               "platform": "linux_aarch64",
               "sha256": ""
             }
@@ -254,7 +254,7 @@
           "lean_toolchain_macos_x86_64": {
             "repoRuleId": "@@rules_lean+//lean:repositories.bzl%lean_download",
             "attributes": {
-              "version": "4.26.0",
+              "version": "4.24.0",
               "platform": "darwin",
               "sha256": ""
             }
@@ -262,7 +262,7 @@
           "lean_toolchain_macos_aarch64": {
             "repoRuleId": "@@rules_lean+//lean:repositories.bzl%lean_download",
             "attributes": {
-              "version": "4.26.0",
+              "version": "4.24.0",
               "platform": "darwin_aarch64",
               "sha256": ""
             }
@@ -270,9 +270,16 @@
           "lean_toolchain_windows_x86_64": {
             "repoRuleId": "@@rules_lean+//lean:repositories.bzl%lean_download",
             "attributes": {
-              "version": "4.26.0",
+              "version": "4.24.0",
               "platform": "windows",
               "sha256": ""
+            }
+          },
+          "lean_deps": {
+            "repoRuleId": "@@rules_lean+//lean/private:deps.bzl%lean_deps",
+            "attributes": {
+              "manifest": "@@//:lake-manifest.json",
+              "lakefile": "@@//:lakefile.toml"
             }
           }
         },

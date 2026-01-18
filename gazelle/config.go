@@ -9,6 +9,17 @@ import (
 	"github.com/bazelbuild/bazel-gazelle/rule"
 )
 
+// ExternalPackage represents an external Lean package from Lake.
+type ExternalPackage struct {
+	// Name is the package name (e.g., "Cli")
+	Name string
+	// ModuleRoot is the root module name exported by this package (e.g., "Cli")
+	// Imports starting with this prefix map to this package.
+	ModuleRoot string
+	// Repo is the Bazel repository name (e.g., "lean_deps")
+	Repo string
+}
+
 // leanConfig holds Lean-specific configuration for a directory.
 type leanConfig struct {
 	// moduleRoot is the prefix to strip from module names.
@@ -18,6 +29,10 @@ type leanConfig struct {
 
 	// excludePatterns are glob patterns for files to exclude from generation.
 	excludePatterns []string
+
+	// externalPackages maps module prefixes to external packages.
+	// Used to resolve imports like "Cli" or "Cli.Basic" to @lean_deps//Cli:Cli.Basic
+	externalPackages []ExternalPackage
 }
 
 // GetLeanConfig returns the Lean configuration for a given Gazelle config.
@@ -44,8 +59,9 @@ func (*leanLang) CheckFlags(fs *flag.FlagSet, c *config.Config) error {
 // Returns the list of directives this extension recognizes in BUILD files.
 func (*leanLang) KnownDirectives() []string {
 	return []string{
-		"lean_root",    // Set module root prefix to strip
-		"lean_exclude", // Exclude files matching pattern
+		"lean_root",     // Set module root prefix to strip
+		"lean_exclude",  // Exclude files matching pattern
+		"lean_external", // Map external package: name=ModuleRoot@repo
 	}
 }
 
@@ -58,8 +74,9 @@ func (*leanLang) Configure(c *config.Config, rel string, f *rule.File) {
 		// Clone parent config
 		parent := raw.(*leanConfig)
 		cfg = &leanConfig{
-			moduleRoot:      parent.moduleRoot,
-			excludePatterns: append([]string{}, parent.excludePatterns...),
+			moduleRoot:       parent.moduleRoot,
+			excludePatterns:  append([]string{}, parent.excludePatterns...),
+			externalPackages: append([]ExternalPackage{}, parent.externalPackages...),
 		}
 	} else {
 		cfg = &leanConfig{}
@@ -85,8 +102,63 @@ func (*leanLang) Configure(c *config.Config, rel string, f *rule.File) {
 			if pattern != "" {
 				cfg.excludePatterns = append(cfg.excludePatterns, pattern)
 			}
+
+		case "lean_external":
+			// # gazelle:lean_external Cli@lean_deps
+			// Maps an external package module root to a Bazel repository.
+			// Format: ModuleRoot@repo or ModuleRoot=PackageName@repo
+			value := strings.TrimSpace(d.Value)
+			if value == "" {
+				continue
+			}
+
+			var pkg ExternalPackage
+
+			// Parse format: ModuleRoot@repo or ModuleRoot=PackageName@repo
+			if atIdx := strings.Index(value, "@"); atIdx != -1 {
+				beforeAt := value[:atIdx]
+				pkg.Repo = value[atIdx+1:]
+
+				// Check for = in the part before @
+				if eqIdx := strings.Index(beforeAt, "="); eqIdx != -1 {
+					pkg.ModuleRoot = beforeAt[:eqIdx]
+					pkg.Name = beforeAt[eqIdx+1:]
+				} else {
+					// ModuleRoot and Name are the same
+					pkg.ModuleRoot = beforeAt
+					pkg.Name = beforeAt
+				}
+			} else {
+				// No @, use default repo "lean_deps"
+				if eqIdx := strings.Index(value, "="); eqIdx != -1 {
+					pkg.ModuleRoot = value[:eqIdx]
+					pkg.Name = value[eqIdx+1:]
+				} else {
+					pkg.ModuleRoot = value
+					pkg.Name = value
+				}
+				pkg.Repo = "lean_deps"
+			}
+
+			if pkg.ModuleRoot != "" && pkg.Name != "" && pkg.Repo != "" {
+				cfg.externalPackages = append(cfg.externalPackages, pkg)
+			}
 		}
 	}
+}
+
+// resolveExternalImport checks if an import matches an external package.
+// Returns the Bazel label if found, or empty string if not an external import.
+func (cfg *leanConfig) resolveExternalImport(moduleName string) string {
+	for _, pkg := range cfg.externalPackages {
+		// Check if import matches this package's module root
+		if moduleName == pkg.ModuleRoot || strings.HasPrefix(moduleName, pkg.ModuleRoot+".") {
+			// Map to @repo//:ModuleName (flat structure at root)
+			// e.g., import Cli.Basic -> @lean_deps//:Cli.Basic
+			return "@" + pkg.Repo + "//:" + moduleName
+		}
+	}
+	return ""
 }
 
 // shouldExclude checks if a file path matches any exclude pattern.

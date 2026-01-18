@@ -67,6 +67,8 @@ func (l *leanLang) Resolve(
 		return
 	}
 
+	cfg := GetLeanConfig(c)
+
 	var deps []string
 	for _, imp := range impList {
 		// Skip stdlib imports (Init, Lean, Std, Lake)
@@ -74,7 +76,7 @@ func (l *leanLang) Resolve(
 			continue
 		}
 
-		// Look up the import in the rule index
+		// 1. Look up the import in the rule index (local modules)
 		res := ix.FindRulesByImport(
 			resolve.ImportSpec{Lang: languageName, Imp: imp},
 			languageName,
@@ -96,7 +98,15 @@ func (l *leanLang) Resolve(
 				// Different repo: use full label
 				deps = append(deps, depLabel.String())
 			}
+			continue
 		}
+
+		// 2. Check if it's an external package import
+		if extLabel := cfg.resolveExternalImport(imp); extLabel != "" {
+			deps = append(deps, extLabel)
+			continue
+		}
+
 		// If not found, skip - will result in build error that user can fix
 	}
 

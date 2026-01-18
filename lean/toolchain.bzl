@@ -5,6 +5,7 @@ LeanToolchainInfo = provider(
     fields = {
         "lean": "The lean executable File",
         "leanc": "The leanc executable File",
+        "lake": "The lake executable File",
         "version": "The Lean version string",
         "lean_include": "Directory containing Lean headers (include/)",
         "lean_lib": "Directory containing Lean runtime libraries (lib/lean/)",
@@ -26,6 +27,7 @@ def _lean_toolchain_impl(ctx):
     toolchain_info = platform_common.ToolchainInfo(
         lean = ctx.file.lean,
         leanc = ctx.file.leanc,
+        lake = ctx.file.lake,
         version = ctx.attr.version,
         # Lean code does #include <lean/lean.h>, so include path should be to "include/"
         lean_include = dist_dir + "/include",
@@ -46,6 +48,11 @@ lean_toolchain = rule(
         ),
         "leanc": attr.label(
             doc = "The leanc executable file",
+            allow_single_file = True,
+            mandatory = True,
+        ),
+        "lake": attr.label(
+            doc = "The lake executable file",
             allow_single_file = True,
             mandatory = True,
         ),
