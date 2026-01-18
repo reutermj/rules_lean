@@ -9,4 +9,6 @@ gazelle(
 lean_module(
     name = "Main",
     src = "Main.lean",
+    visibility = ["//visibility:public"],
+    deps = ["//lib:Greeter"],
 )

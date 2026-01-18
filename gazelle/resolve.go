@@ -1,6 +1,8 @@
 package lean
 
 import (
+	"strings"
+
 	"github.com/bazelbuild/bazel-gazelle/config"
 	"github.com/bazelbuild/bazel-gazelle/label"
 	"github.com/bazelbuild/bazel-gazelle/repo"
@@ -16,8 +18,18 @@ func (*leanLang) Imports(c *config.Config, r *rule.Rule, f *rule.File) []resolve
 		return nil
 	}
 
-	// The module name is the rule name (e.g., "MyLib.Core")
-	moduleName := r.Name()
+	// Compute the full Lean module name from package path + rule name
+	// e.g., for //lib:Greeter, the full module name is "lib.Greeter"
+	// This is what Lean uses in import statements
+	ruleName := r.Name()
+	var moduleName string
+	if f != nil && f.Pkg != "" {
+		// Convert package path to module prefix (e.g., "lib" -> "lib.")
+		pkgPrefix := strings.ReplaceAll(f.Pkg, "/", ".")
+		moduleName = pkgPrefix + "." + ruleName
+	} else {
+		moduleName = ruleName
+	}
 
 	return []resolve.ImportSpec{
 		{
@@ -71,10 +83,17 @@ func (l *leanLang) Resolve(
 		if len(res) > 0 {
 			// Found a matching rule
 			depLabel := res[0].Label
-			// Convert to string, making it relative if in same package
-			if depLabel.Repo == from.Repo && depLabel.Pkg == from.Pkg {
-				deps = append(deps, ":"+depLabel.Name)
+			// Convert to string, using appropriate format based on location
+			if depLabel.Repo == from.Repo {
+				if depLabel.Pkg == from.Pkg {
+					// Same package: use relative label
+					deps = append(deps, ":"+depLabel.Name)
+				} else {
+					// Same repo, different package: use //pkg:target
+					deps = append(deps, "//"+depLabel.Pkg+":"+depLabel.Name)
+				}
 			} else {
+				// Different repo: use full label
 				deps = append(deps, depLabel.String())
 			}
 		}

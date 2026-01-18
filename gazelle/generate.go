@@ -22,6 +22,9 @@ func (l *leanLang) GenerateRules(args language.GenerateArgs) language.GenerateRe
 		return language.GenerateResult{}
 	}
 
+	// Parse imports from all files in this directory
+	fileImports, _ := ParseImportsFromDir(args.Dir, leanFiles)
+
 	var gen []*rule.Rule
 	var imports []interface{}
 
@@ -35,16 +38,23 @@ func (l *leanLang) GenerateRules(args language.GenerateArgs) language.GenerateRe
 			wsRelPath = filepath.Join(args.Rel, file)
 		}
 
-		moduleName := cfg.moduleNameFromPath(wsRelPath)
+		moduleName := cfg.moduleNameFromPath(wsRelPath, args.Rel)
 
 		r := rule.NewRule("lean_module", moduleName)
 		r.SetAttr("src", file)
-		// deps will be populated by Resolve() in a later phase
+		r.SetAttr("visibility", []string{"//visibility:public"})
+		// deps will be populated by Resolve()
 
 		gen = append(gen, r)
 
-		// Store empty imports for now - will be populated in Phase G2
-		imports = append(imports, []string{})
+		// Extract module names from parsed imports
+		var moduleImports []string
+		if fileImps, ok := fileImports[file]; ok {
+			for _, imp := range fileImps {
+				moduleImports = append(moduleImports, imp.Module)
+			}
+		}
+		imports = append(imports, moduleImports)
 	}
 
 	return language.GenerateResult{

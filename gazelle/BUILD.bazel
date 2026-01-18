@@ -8,6 +8,7 @@ go_library(
         "generate.go",
         "kinds.go",
         "language.go",
+        "parser.go",
         "resolve.go",
     ],
     importpath = "github.com/reutermj/rules_lean/gazelle",

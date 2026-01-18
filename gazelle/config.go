@@ -104,15 +104,25 @@ func (cfg *leanConfig) shouldExclude(path string) bool {
 }
 
 // moduleNameFromPath converts a file path to a Lean module name.
-// Example: "lib/Foo/Bar.lean" with moduleRoot="lib" -> "Foo.Bar"
-// Example: "lib/Foo/Bar.lean" with moduleRoot="" -> "lib.Foo.Bar"
-func (cfg *leanConfig) moduleNameFromPath(path string) string {
+// The pkgRel parameter is the package-relative directory (e.g., "lib" for //lib).
+// This is stripped from the path to avoid redundant names like "lib:lib.Greeter".
+// Example: "lib/Greeter.lean" with pkgRel="lib" -> "Greeter"
+// Example: "lib/Foo/Bar.lean" with pkgRel="lib" -> "Foo.Bar"
+// Example: "Greeter.lean" with pkgRel="" -> "Greeter"
+func (cfg *leanConfig) moduleNameFromPath(path string, pkgRel string) string {
 	// Remove .lean extension
 	name := strings.TrimSuffix(path, ".lean")
 
 	// Strip module root prefix if configured
 	if cfg.moduleRoot != "" {
 		prefix := cfg.moduleRoot + "/"
+		name = strings.TrimPrefix(name, prefix)
+	}
+
+	// Strip the package-relative directory to avoid redundant names
+	// e.g., for //lib package, "lib/Greeter" becomes "Greeter"
+	if pkgRel != "" {
+		prefix := pkgRel + "/"
 		name = strings.TrimPrefix(name, prefix)
 	}
 

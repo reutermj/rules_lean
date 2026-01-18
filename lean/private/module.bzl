@@ -17,7 +17,7 @@ LeanModuleInfo = provider(
     },
 )
 
-def _lean_module_compile(ctx, src, lean, olean, ilean, c_file, dep_oleans):
+def _lean_module_compile(ctx, src, lean, olean, ilean, c_file, dep_infos, transitive_oleans):
     """Compiles a .lean file to .olean, .ilean, and .c files.
 
     Args:
@@ -27,7 +27,8 @@ def _lean_module_compile(ctx, src, lean, olean, ilean, c_file, dep_oleans):
         olean: The output .olean file.
         ilean: The output .ilean file.
         c_file: The output .c file.
-        dep_oleans: List of .olean files from dependencies.
+        dep_infos: List of LeanModuleInfo from direct dependencies.
+        transitive_oleans: List of all transitive .olean files.
 
     Returns:
         The copied source file (intermediate output for path handling).
@@ -40,40 +41,54 @@ def _lean_module_compile(ctx, src, lean, olean, ilean, c_file, dep_oleans):
 
     # Build LEAN_PATH from dependency oleans
     # LEAN_PATH tells lean where to find .olean files for imports
-    olean_dirs = {}
-    for olean_file in dep_oleans:
-        # Get the directory containing the olean
-        olean_dirs[olean_file.dirname] = True
-    lean_path = ":".join(sorted(olean_dirs.keys())) if olean_dirs else ""
+    # For a module like lib.Greeter with olean at bazel-bin/lib/Greeter.olean,
+    # LEAN_PATH should point to bazel-bin (the root where lib/Greeter.olean is found)
+    olean_roots = {}
+
+    # Use direct dep_infos to compute olean roots from module names
+    for info in dep_infos:
+        # Compute the olean root by stripping the module path from the full path
+        # e.g., for module "lib.Greeter" and path "bazel-bin/lib/Greeter.olean"
+        # module_path = "lib/Greeter.olean", so root = "bazel-bin"
+        module_path = info.module_name.replace(".", "/") + ".olean"
+        olean_path = info.olean.path
+        if olean_path.endswith("/" + module_path):
+            olean_root = olean_path[:-(len(module_path) + 1)]
+            olean_roots[olean_root] = True
+        else:
+            # Fallback to dirname if path doesn't match expected pattern
+            olean_roots[info.olean.dirname] = True
+
+    lean_path = ":".join(sorted(olean_roots.keys())) if olean_roots else ""
 
     # Build the compilation command
     # lean --root=<root> <src> -o <olean> --ilean=<ilean> -c <c_file>
-    cmd_parts = [
-        "mkdir -p {src_dir} && cp -L {src} {src_copy}".format(
-            src_dir = src_copy.dirname,
-            src = src.path,
-            src_copy = src_copy.path,
-        ),
-    ]
-
-    if lean_path:
-        cmd_parts.append("LEAN_PATH={lean_path}".format(lean_path = lean_path))
-
-    cmd_parts.append(
-        "{lean} --root={root} {src_copy} -o {olean} -i {ilean} -c {c_file}".format(
-            lean = lean.path,
-            root = root_dir,
-            src_copy = src_copy.path,
-            olean = olean.path,
-            ilean = ilean.path,
-            c_file = c_file.path,
-        ),
+    setup_cmd = "mkdir -p {src_dir} && cp -L {src} {src_copy}".format(
+        src_dir = src_copy.dirname,
+        src = src.path,
+        src_copy = src_copy.path,
     )
+
+    # LEAN_PATH must be on the same line as the lean command (not &&-separated)
+    # to properly set the environment variable for lean
+    lean_env = "LEAN_PATH={lean_path} ".format(lean_path = lean_path) if lean_path else ""
+
+    lean_cmd = "{lean_env}{lean} --root={root} {src_copy} -o {olean} -i {ilean} -c {c_file}".format(
+        lean_env = lean_env,
+        lean = lean.path,
+        root = root_dir,
+        src_copy = src_copy.path,
+        olean = olean.path,
+        ilean = ilean.path,
+        c_file = c_file.path,
+    )
+
+    cmd_parts = [setup_cmd, lean_cmd]
 
     ctx.actions.run_shell(
         mnemonic = "LeanCompile",
         command = " && ".join(cmd_parts),
-        inputs = [src, lean] + dep_oleans,
+        inputs = [src, lean] + transitive_oleans,
         outputs = [olean, ilean, c_file, src_copy],
         use_default_shell_env = True,
     )
@@ -96,26 +111,33 @@ def _lean_module_impl(ctx):
     if not src.path.endswith(".lean"):
         fail("Source file must have .lean extension, got: {}".format(src.path))
 
-    # Collect transitive oleans from dependencies
-    dep_oleans = []
+    # Collect dependency info
+    dep_infos = []
     transitive_olean_depsets = []
     transitive_c_object_depsets = []
 
     for dep in ctx.attr.deps:
         if LeanModuleInfo in dep:
             info = dep[LeanModuleInfo]
-            dep_oleans.append(info.olean)
+            dep_infos.append(info)
             transitive_olean_depsets.append(info.transitive_oleans)
             transitive_c_object_depsets.append(info.transitive_c_objects)
 
     # Output files
+    # declare_file paths are relative to the package, so we use basename
+    # e.g., for //lib:Greeter with src lib/Greeter.lean, basename is "Greeter.lean"
+    # This creates bazel-bin/lib/Greeter.olean (not bazel-bin/lib/lib/Greeter.olean)
     name = ctx.label.name
-    olean = ctx.actions.declare_file(name + ".olean")
-    ilean = ctx.actions.declare_file(name + ".ilean")
+    src_basename = src.basename.removesuffix(".lean")
+    olean = ctx.actions.declare_file(src_basename + ".olean")
+    ilean = ctx.actions.declare_file(src_basename + ".ilean")
     c_file = ctx.actions.declare_file(name + ".c")
 
+    # Collect transitive oleans for compilation inputs
+    transitive_oleans = depset(transitive = transitive_olean_depsets).to_list()
+
     # Compile .lean to .olean, .ilean, .c
-    _lean_module_compile(ctx, src, lean, olean, ilean, c_file, dep_oleans)
+    _lean_module_compile(ctx, src, lean, olean, ilean, c_file, dep_infos, transitive_oleans)
 
     # Compile .c to .o using CC toolchain
     _compilation_context, compilation_outputs = cc_common.compile(

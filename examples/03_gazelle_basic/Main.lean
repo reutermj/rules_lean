@@ -1,3 +1,5 @@
 -- Main entry point
+import lib.Greeter
+
 def main : IO Unit :=
-  IO.println "Hello from Gazelle-generated Lean!"
+  IO.println (greet "World")
