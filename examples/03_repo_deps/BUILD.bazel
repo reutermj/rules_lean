@@ -1,0 +1,24 @@
+"""Example BUILD file demonstrating use of generated dependency information."""
+
+load("@my_lean_deps//:deps.bzl", "LEAN_DEPS", "LEAN_MODULES", "LEAN_SOURCES")
+
+# Print the dependency information (for demonstration)
+# Run: bazel build //:show_deps
+genrule(
+    name = "show_deps",
+    outs = ["deps_info.txt"],
+    cmd = """
+echo "Lean Modules (in compilation order):" > $@
+echo "  {modules}" >> $@
+echo "" >> $@
+echo "Dependency Graph:" >> $@
+echo "  {deps}" >> $@
+echo "" >> $@
+echo "Source Files:" >> $@
+echo "  {sources}" >> $@
+""".format(
+        modules = LEAN_MODULES,
+        deps = LEAN_DEPS,
+        sources = LEAN_SOURCES,
+    ),
+)

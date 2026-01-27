@@ -1,0 +1,40 @@
+"""Example demonstrating lean_deps repository rule for automatic dependency parsing."""
+
+module(
+    name = "example_repo_deps",
+    version = "0.0.1",
+)
+
+bazel_dep(name = "rules_lean", version = "0.0.1")
+local_path_override(
+    module_name = "rules_lean",
+    path = "../..",
+)
+
+# Register the lean_deps repository rule
+# This will parse all .lean files in src/ and generate dependency information
+lean_deps_ext = use_extension("@rules_lean//lean:extensions.bzl", "lean_deps_ext")
+lean_deps_ext.parse(
+    name = "my_lean_deps",
+    src_dir = "src",
+)
+use_repo(lean_deps_ext, "my_lean_deps")
+
+# Also register the Lean toolchain for actual compilation
+lean = use_extension("@rules_lean//lean:extensions.bzl", "lean")
+lean.toolchain(version = "4.12.0")
+use_repo(lean, "lean_toolchain_linux_x86_64")
+register_toolchains("@lean_toolchain_linux_x86_64//:lean_toolchain")
+
+# CC toolchain
+bazel_dep(name = "toolchains_cc", version = "0.1.0")
+git_override(
+    module_name = "toolchains_cc",
+    remote = "https://github.com/nicholasjng/toolchains_cc",
+    commit = "d4bd5de2ccc34bf06e86bfb8d882fd4a149db23f",
+)
+
+cc = use_extension("@toolchains_cc//toolchains/cc:cc.bzl", "cc")
+cc.declare()
+use_repo(cc, "cc")
+register_toolchains("@cc//:toolchain")
