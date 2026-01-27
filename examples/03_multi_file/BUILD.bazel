@@ -1,0 +1,17 @@
+load("@rules_lean//lean:defs.bzl", "lean_binary")
+
+# Multi-file Lean application using auto-generated module dependencies
+#
+# The lean.project() extension scans src/ for .lean files, runs `lean --deps`
+# to discover imports, and generates lean_module targets in @mylib.
+#
+# This binary has its own main file (src/App.lean) and depends on the
+# utility modules from the library.
+lean_binary(
+    name = "app",
+    src = "src/App.lean",
+    deps = [
+        "@mylib//:Utils.Math",
+        "@mylib//:Utils.String",
+    ],
+)

@@ -1,6 +1,8 @@
 """Implementation of Lean build rules."""
+
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+load("//lean/private:module.bzl", "LeanModuleInfo")
 
 # Module naming and Lean's --root flag
 # =====================================
@@ -37,7 +39,7 @@ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 # directory structure under the execroot. The copy is placed at the same
 # relative path so the module name is correct:
 #   execroot/proj/Foo.lean (real file) → module proj.Foo
-def _lean_compile(ctx, src, lean, c_file):
+def _lean_compile(ctx, src, lean, c_file, dep_oleans = [], lean_path = ""):
     """Compiles a .lean file to a .c file.
 
     Handles Bazel's symlink-based execroot by copying the source file to ensure
@@ -49,6 +51,8 @@ def _lean_compile(ctx, src, lean, c_file):
         src: The source .lean file.
         lean: The lean compiler executable.
         c_file: The output .c file to produce.
+        dep_oleans: List of .olean files from dependencies.
+        lean_path: LEAN_PATH environment variable value for import resolution.
 
     Returns:
         The copied source file (an intermediate output).
@@ -67,9 +71,16 @@ def _lean_compile(ctx, src, lean, c_file):
     #   module   = proj.Foo
     root_dir = src_copy.path[:-(len(src.short_path) + 1)]  # Remove "/proj/Foo.lean"
 
+    compile_cmd = "mkdir -p {src_dir} && cp -L {src} {src_copy} && {lean} --root={root} {src_copy} -c {out}"
+
+    # Build environment with LEAN_PATH if we have dependencies
+    env = {}
+    if lean_path:
+        env["LEAN_PATH"] = lean_path
+
     ctx.actions.run_shell(
         mnemonic = "LeanCompile",
-        command = "mkdir -p {src_dir} && cp -L {src} {src_copy} && {lean} --root={root} {src_copy} -c {out}".format(
+        command = compile_cmd.format(
             lean = lean.path,
             src = src.path,
             src_copy = src_copy.path,
@@ -77,8 +88,9 @@ def _lean_compile(ctx, src, lean, c_file):
             root = root_dir,
             out = c_file.path,
         ),
-        inputs = [src, lean],
+        inputs = [src, lean] + dep_oleans,
         outputs = [c_file, src_copy],
+        env = env,
         use_default_shell_env = True,
     )
     return src_copy
@@ -99,12 +111,35 @@ def _lean_binary_impl(ctx):
     if not src.path.endswith(".lean"):
         fail("Source file must have .lean extension, got: {}".format(src.path))
 
+    # Collect transitive oleans and objects from deps
+    dep_oleans = []
+    dep_olean_roots = []
+    dep_objects = []
+    for dep in ctx.attr.deps:
+        if LeanModuleInfo in dep:
+            info = dep[LeanModuleInfo]
+            dep_oleans.extend(info.transitive_oleans.to_list())
+            dep_objects.extend(info.transitive_objects.to_list())
+            # Compute the root directory for this olean
+            # The olean path is like: bazel-out/.../Utils/Math.olean
+            # For module Utils.Math, we need the root (before Utils/)
+            olean = info.olean
+            dep_module = info.module_name
+            dep_module_path = dep_module.replace(".", "/") + ".olean"
+            if olean.path.endswith(dep_module_path):
+                root = olean.path[:-(len(dep_module_path) + 1)]
+                if root and root not in dep_olean_roots:
+                    dep_olean_roots.append(root)
+
+    # Build LEAN_PATH from dependency olean root directories
+    lean_path = ":".join(dep_olean_roots) if dep_olean_roots else ""
+
     # Output files
     name = ctx.label.name
     c_file = ctx.actions.declare_file(name + ".c")
 
-    # Compile .lean to .c
-    _lean_compile(ctx, src, lean, c_file)
+    # Compile .lean to .c (with LEAN_PATH for imports)
+    _lean_compile(ctx, src, lean, c_file, dep_oleans, lean_path)
 
     # Compile .c to .o using CC toolchain
     # Lean-generated C code contains unused variables (e.g., `lean_object* in;`)
@@ -181,7 +216,11 @@ def _lean_binary_impl(ctx):
         "-lrt",
     ]
 
-    link_flags = lib_paths + lean_runtime_libs + cxx_runtime_libs + support_libs + system_libs
+    # Add dependency object files to linker inputs
+    # These are the compiled .o files from lean_module deps
+    dep_object_flags = [obj.path for obj in dep_objects]
+
+    link_flags = dep_object_flags + lib_paths + lean_runtime_libs + cxx_runtime_libs + support_libs + system_libs
 
     # Link object files into final executable
     #
@@ -201,7 +240,7 @@ def _lean_binary_impl(ctx):
         output_type = "executable",
         name = name,
         user_link_flags = link_flags,
-        additional_inputs = lean_toolchain.libs.to_list(),
+        additional_inputs = lean_toolchain.libs.to_list() + dep_objects,
     )
 
     return [
@@ -219,6 +258,11 @@ lean_binary = rule(
             doc = "The Lean source file to compile",
             allow_single_file = [".lean"],
             mandatory = True,
+        ),
+        "deps": attr.label_list(
+            doc = "lean_module targets this binary depends on",
+            providers = [LeanModuleInfo],
+            default = [],
         ),
         "_cc_toolchain": attr.label(
             default = Label("@bazel_tools//tools/cpp:current_cc_toolchain"),
