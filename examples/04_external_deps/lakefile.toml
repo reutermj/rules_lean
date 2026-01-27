@@ -1,0 +1,12 @@
+name = "example_04_external_deps"
+version = "0.1.0"
+defaultTargets = ["Main"]
+
+[[require]]
+name = "Cli"
+git = "https://github.com/leanprover/lean4-cli"
+rev = "v4.27.0"
+
+[[lean_lib]]
+name = "Main"
+srcDir = "src"

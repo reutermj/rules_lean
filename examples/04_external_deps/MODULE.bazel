@@ -1,0 +1,40 @@
+module(
+    name = "example_04_external_deps",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_lean", version = "0.0.1")
+
+local_path_override(
+    module_name = "rules_lean",
+    path = "../..",
+)
+
+# Hermetic CC toolchain with sysroot for reproducible builds
+bazel_dep(name = "toolchains_cc")
+git_override(
+    module_name = "toolchains_cc",
+    commit = "5b523bac537c5cf3ae9b0bea9fd29b227303de10",
+    remote = "https://github.com/reutermj/toolchains_cc",
+)
+
+register_toolchains("@toolchains_cc")
+
+lean = use_extension("@rules_lean//lean:extensions.bzl", "lean")
+lean.toolchain(version = "4.27.0")
+
+# Creates @lake repository with all packages from lake-manifest.json
+lean.from_lake(
+    manifest = "lake-manifest.json",
+)
+
+# Auto-generate lean_module targets, with external deps from @lake
+lean.project(
+    name = "myapp",
+    root = "src",
+    deps = ["@lake//:Cli"],
+)
+
+use_repo(lean, "lake", "lean_toolchain_linux_x86_64", "myapp")
+
+register_toolchains("@lean_toolchain_linux_x86_64//:lean_toolchain")

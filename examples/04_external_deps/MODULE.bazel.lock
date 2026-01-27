@@ -249,8 +249,10 @@
     "@@rules_lean+//lean:extensions.bzl%lean": {
       "general": {
         "bzlTransitiveDigest": "Ghfawc9JGf05DikpDAKuk3W1TssTH6jjuVO8v+LUdpk=",
-        "usagesDigest": "eb0UKsYFRst2xOaIdoqRDPBl+JM8ESefT8jTIKQSpqI=",
-        "recordedInputs": [],
+        "usagesDigest": "Fvcd6t8BTaX7Txz1m92PoojrUyWVsYAJfo8WX58afDg=",
+        "recordedInputs": [
+          "FILE:@@//lake-manifest.json b65e23dd38000771364b38c388c863bdad7719d5fd83cab99f3b9d2787fe660d"
+        ],
         "generatedRepoSpecs": {
           "lean_toolchain_linux_x86_64": {
             "repoRuleId": "@@rules_lean+//lean:repositories.bzl%lean_download",
@@ -290,6 +292,25 @@
               "version": "4.27.0",
               "platform": "windows",
               "sha256": ""
+            }
+          },
+          "lake": {
+            "repoRuleId": "@@rules_lean+//lean/private:lake_packages.bzl%lean_lake_packages",
+            "attributes": {
+              "packages": {
+                "Cli": ".lake/packages/Cli"
+              },
+              "lean_binary": "@@rules_lean++lean+lean_toolchain_linux_x86_64//:lean-4.27.0-linux/bin/lean"
+            }
+          },
+          "myapp": {
+            "repoRuleId": "@@rules_lean+//lean/private:project.bzl%lean_project",
+            "attributes": {
+              "root": "src",
+              "lean_binary": "@@rules_lean++lean+lean_toolchain_linux_x86_64//:lean-4.27.0-linux/bin/lean",
+              "deps": [
+                "@lake//:Cli"
+              ]
             }
           }
         }

@@ -8,9 +8,10 @@ LeanModuleInfo = provider(
     fields = {
         "module_name": "string: Lean module name (e.g., 'App.Config')",
         "olean": "File: compiled .olean file",
+        "ilean": "File: incremental Lean data file (.ilean)",
         "c_source": "File: generated C source file",
         "object_file": "File: compiled object file (.o)",
-        "transitive_oleans": "depset: all transitive .olean files",
+        "transitive_oleans": "depset: all transitive .olean and related files",
         "transitive_objects": "depset: all transitive object files",
     },
 )
@@ -38,11 +39,25 @@ def _lean_module_impl(ctx):
         # Use target name as module name by default
         module_name = ctx.label.name
 
-    # Output files - use module path structure for olean so LEAN_PATH works
+    # Check if this is a Lean 4 module system file (uses `module` keyword)
+    is_module = ctx.attr.is_module
+
+    # Output files - use module path structure for olean/ilean so LEAN_PATH works
     name = ctx.label.name
     module_path_base = module_name.replace(".", "/")
     olean_file = ctx.actions.declare_file(module_path_base + ".olean")
+    ilean_file = ctx.actions.declare_file(module_path_base + ".ilean")
     c_file = ctx.actions.declare_file(name + ".c")
+    setup_file = ctx.actions.declare_file(name + ".setup.json")
+
+    # Module system files generate additional outputs
+    olean_private_file = None
+    olean_server_file = None
+    ir_file = None
+    if is_module:
+        olean_private_file = ctx.actions.declare_file(module_path_base + ".olean.private")
+        olean_server_file = ctx.actions.declare_file(module_path_base + ".olean.server")
+        ir_file = ctx.actions.declare_file(module_path_base + ".ir")
 
     # Collect transitive oleans from deps for LEAN_PATH
     dep_oleans = []
@@ -78,13 +93,30 @@ def _lean_module_impl(ctx):
     # The root directory is the prefix before the module path
     root_dir = src_copy.path[:-(len(module_path) + 1)]
 
-    # Compile .lean to .olean and .c
-    compile_cmd = "mkdir -p {src_dir} && cp -L {src} {src_copy} && {lean} --root={root} {src_copy} -o {olean} -c {c_out}"
+    # Create setup JSON file
+    # isModule=true: Uses Lean 4 module system, requires `module` keyword and `public section`
+    #   - Generates .ir, .olean.private, .olean.server files
+    #   - Only explicitly `public` definitions are exported
+    # isModule=false: Traditional Lean code
+    #   - All non-private definitions are automatically exported
+    #   - No additional files generated
+    setup_json = '{{"name": "{module}", "isModule": {is_module}, "importArts": {{}}, "dynlibs": [], "plugins": [], "options": {{}}}}'.format(
+        module = module_name,
+        is_module = "true" if is_module else "false",
+    )
+
+    # Compile .lean to .olean, .ilean, and .c (plus extra files if is_module)
+    compile_cmd = "mkdir -p {src_dir} && cp -L {src} {src_copy} && echo '{setup_json}' > {setup_file} && {lean} --root={root} {src_copy} -o {olean} -i {ilean} -c {c_out} --setup {setup_file}"
 
     # Build environment with LEAN_PATH if we have dependencies
     env = {}
     if lean_path:
         env["LEAN_PATH"] = lean_path
+
+    # Build output list
+    outputs = [olean_file, ilean_file, c_file, src_copy, setup_file]
+    if is_module:
+        outputs.extend([olean_private_file, olean_server_file, ir_file])
 
     ctx.actions.run_shell(
         mnemonic = "LeanModule",
@@ -95,10 +127,13 @@ def _lean_module_impl(ctx):
             src_dir = src_copy.dirname,
             root = root_dir,
             olean = olean_file.path,
+            ilean = ilean_file.path,
             c_out = c_file.path,
+            setup_json = setup_json,
+            setup_file = setup_file.path,
         ),
         inputs = [src, lean] + dep_oleans,
-        outputs = [olean_file, c_file, src_copy],
+        outputs = outputs,
         env = env,
         use_default_shell_env = True,
     )
@@ -122,8 +157,12 @@ def _lean_module_impl(ctx):
     object_file = object_files[0]
 
     # Build transitive depsets
+    direct_oleans = [olean_file, ilean_file]
+    if is_module:
+        direct_oleans.extend([olean_private_file, olean_server_file, ir_file])
+
     transitive_oleans = depset(
-        [olean_file],
+        direct_oleans,
         transitive = [dep[LeanModuleInfo].transitive_oleans for dep in ctx.attr.deps if LeanModuleInfo in dep],
     )
     transitive_objects = depset(
@@ -131,13 +170,19 @@ def _lean_module_impl(ctx):
         transitive = [dep[LeanModuleInfo].transitive_objects for dep in ctx.attr.deps if LeanModuleInfo in dep],
     )
 
+    # Build default files output
+    default_files = [olean_file, ilean_file, c_file, object_file]
+    if is_module:
+        default_files.extend([olean_private_file, olean_server_file, ir_file])
+
     return [
         DefaultInfo(
-            files = depset([olean_file, c_file, object_file]),
+            files = depset(default_files),
         ),
         LeanModuleInfo(
             module_name = module_name,
             olean = olean_file,
+            ilean = ilean_file,
             c_source = c_file,
             object_file = object_file,
             transitive_oleans = transitive_oleans,
@@ -161,6 +206,24 @@ lean_module = rule(
         "module_name": attr.string(
             doc = "Lean module name (e.g., 'App.Config'). Defaults to target name.",
             default = "",
+        ),
+        "is_module": attr.bool(
+            doc = """Whether this is a Lean 4 module system file (uses `module` keyword).
+
+Set to True for files that:
+- Start with the `module` keyword
+- Use `public section` or `public import`
+- Are part of a package following Lean 4 module conventions
+
+When True:
+- Generates .ir, .olean.private, .olean.server files
+- Only explicitly `public` definitions are exported
+
+When False (default):
+- All non-private definitions are automatically exported
+- Standard Lean 4 code without module system
+""",
+            default = False,
         ),
         "_cc_toolchain": attr.label(
             default = Label("@bazel_tools//tools/cpp:current_cc_toolchain"),

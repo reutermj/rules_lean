@@ -72,6 +72,27 @@ def _has_cycle(modules):
     # If we couldn't process all nodes, there's a cycle
     return processed != len(modules)
 
+def _parse_external_deps(deps):
+    """Parse external dependency labels to extract package info.
+
+    Args:
+        deps: List of labels like ["@lake//:Cli", "@lake//:Std"]
+
+    Returns:
+        Dict mapping package name to repo (e.g., {"Cli": "@lake", "Std": "@lake"})
+    """
+    external_packages = {}
+    for dep in deps:
+        # Parse "@repo//:Target" format
+        if dep.startswith("@") and "//:" in dep:
+            parts = dep.split("//:")
+            repo = parts[0]  # "@lake"
+            target = parts[1]  # "Cli" or "Cli.Basic"
+            # Extract the top-level package name (before any dots)
+            pkg_name = target.split(".")[0]
+            external_packages[pkg_name] = repo
+    return external_packages
+
 def _generate_build_file(modules):
     """Generate BUILD.bazel content for lean_module targets."""
     lines = [
@@ -84,11 +105,16 @@ def _generate_build_file(modules):
         # Use the local path (symlinked into the repo)
         src_local = info["src_local"]
 
+        # Combine local deps with external deps
         local_deps = info.get("local_deps", [])
+        external_deps = info.get("external_deps", [])
+
+        all_deps = ['":' + d + '"' for d in sorted(local_deps)]
+        all_deps.extend(['"' + d + '"' for d in sorted(external_deps)])
+
         deps_str = ""
-        if local_deps:
-            deps_items = ['":' + d + '"' for d in sorted(local_deps)]
-            deps_str = "\n    deps = [" + ", ".join(deps_items) + "],"
+        if all_deps:
+            deps_str = "\n    deps = [" + ", ".join(all_deps) + "],"
 
         # Reference the local symlinked source file
         target_def = 'lean_module(\n    name = "{name}",\n    src = ":{src}",{deps}\n    visibility = ["//visibility:public"],\n)\n'
@@ -112,6 +138,36 @@ def _lean_project_impl(rctx):
         rctx.file("BUILD.bazel", empty_msg)
         return
 
+    # Parse external dependencies to know which packages are available
+    external_packages = _parse_external_deps(rctx.attr.deps)
+
+    # If there are external deps, run `lake update` to download packages
+    # and add them to LEAN_PATH for import resolution
+    lean_path_parts = [str(project_root)]
+
+    if external_packages:
+        # Derive lake path from lean path
+        lean_path_str = str(lean_binary)
+        lake_path = lean_path_str.rsplit("/lean", 1)[0] + "/lake"
+
+        # Run `lake update` to download packages
+        result = rctx.execute(
+            [lake_path, "update"],
+            working_directory = str(workspace_root),
+            quiet = False,
+        )
+        if result.return_code != 0:
+            fail("lake update failed: " + result.stderr)
+
+        # Add downloaded package directories to LEAN_PATH
+        lake_packages_dir = workspace_root.get_child(".lake").get_child("packages")
+        for pkg_name in external_packages.keys():
+            pkg_dir = lake_packages_dir.get_child(pkg_name)
+            if pkg_dir.exists:
+                lean_path_parts.append(str(pkg_dir))
+
+    lean_path_env = ":".join(lean_path_parts)
+
     modules = {}
     project_root_str = str(project_root)
 
@@ -120,7 +176,7 @@ def _lean_project_impl(rctx):
 
         result = rctx.execute(
             [str(lean_binary), "--deps", f],
-            environment = {"LEAN_PATH": project_root_str},
+            environment = {"LEAN_PATH": lean_path_env},
             quiet = True,
         )
 
@@ -149,19 +205,48 @@ def _lean_project_impl(rctx):
             "deps": dep_oleans,
         }
 
-    # Resolve local dependencies
+    # Resolve dependencies - both local and external
     for mod_name in modules:
         info = modules[mod_name]
         local_deps = []
+        external_deps = []
+
         for olean_path in info["deps"]:
             if olean_path.startswith(project_root_str):
+                # Local dependency within this project
                 rel_path = olean_path[len(project_root_str):].lstrip("/")
                 if rel_path.endswith(".olean"):
                     rel_path = rel_path[:-6]
                 dep_module = rel_path.replace("/", ".")
                 if dep_module != mod_name:
                     local_deps.append(dep_module)
+            else:
+                # Check if this is an external package dependency
+                # lean --deps outputs paths like /<pkg>/<module>.olean
+                # We need to match against external package names
+                for pkg_name, repo in external_packages.items():
+                    # Check if olean path contains the package name
+                    # Path format: .../packages/Cli/Cli/Basic.olean
+                    if "/" + pkg_name + "/" in olean_path or olean_path.endswith("/" + pkg_name + ".olean"):
+                        # Extract module name from olean path
+                        # Find the package directory in the path
+                        pkg_marker = "/" + pkg_name + "/"
+                        if pkg_marker in olean_path:
+                            idx = olean_path.find(pkg_marker) + len(pkg_marker)
+                            rel_olean = olean_path[idx:]
+                            if rel_olean.endswith(".olean"):
+                                rel_olean = rel_olean[:-6]
+                            dep_module = rel_olean.replace("/", ".")
+                            external_dep = "{repo}//:{module}".format(repo = repo, module = dep_module)
+                            external_deps.append(external_dep)
+                        elif olean_path.endswith("/" + pkg_name + ".olean"):
+                            # Top-level module like Cli.olean
+                            external_dep = "{repo}//:{pkg}".format(repo = repo, pkg = pkg_name)
+                            external_deps.append(external_dep)
+                        break
+
         info["local_deps"] = _dedupe(local_deps)
+        info["external_deps"] = _dedupe(external_deps)
 
     if _has_cycle(modules):
         fail("Circular imports detected in project")
@@ -174,5 +259,6 @@ lean_project = repository_rule(
     attrs = {
         "root": attr.string(default = ""),
         "lean_binary": attr.label(mandatory = True, allow_single_file = True),
+        "deps": attr.string_list(default = []),
     },
 )

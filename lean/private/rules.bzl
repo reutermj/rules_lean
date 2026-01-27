@@ -71,7 +71,22 @@ def _lean_compile(ctx, src, lean, c_file, dep_oleans = [], lean_path = ""):
     #   module   = proj.Foo
     root_dir = src_copy.path[:-(len(src.short_path) + 1)]  # Remove "/proj/Foo.lean"
 
-    compile_cmd = "mkdir -p {src_dir} && cp -L {src} {src_copy} && {lean} --root={root} {src_copy} -c {out}"
+    # Derive module name from source path (remove .lean extension and replace / with .)
+    module_name = src.short_path
+    if module_name.endswith(".lean"):
+        module_name = module_name[:-5]
+    module_name = module_name.replace("/", ".")
+
+    # Setup file for --setup flag
+    setup_file = ctx.actions.declare_file(ctx.label.name + ".setup.json")
+
+    # Create setup JSON with isModule=false for binary entry points
+    # This generates the C main() function while still allowing imports of modules compiled with isModule=true
+    setup_json = '{{"name": "{module}", "isModule": false, "importArts": {{}}, "dynlibs": [], "plugins": [], "options": {{}}}}'.format(
+        module = module_name,
+    )
+
+    compile_cmd = "mkdir -p {src_dir} && cp -L {src} {src_copy} && echo '{setup_json}' > {setup_file} && {lean} --root={root} {src_copy} -c {out} --setup {setup_file}"
 
     # Build environment with LEAN_PATH if we have dependencies
     env = {}
@@ -87,9 +102,11 @@ def _lean_compile(ctx, src, lean, c_file, dep_oleans = [], lean_path = ""):
             src_dir = src_copy.dirname,
             root = root_dir,
             out = c_file.path,
+            setup_json = setup_json,
+            setup_file = setup_file.path,
         ),
         inputs = [src, lean] + dep_oleans,
-        outputs = [c_file, src_copy],
+        outputs = [c_file, src_copy, setup_file],
         env = env,
         use_default_shell_env = True,
     )
@@ -113,26 +130,38 @@ def _lean_binary_impl(ctx):
 
     # Collect transitive oleans and objects from deps
     dep_oleans = []
-    dep_olean_roots = []
+    dep_olean_roots = {}  # Use dict for deduplication, key=root, value=True
     dep_objects = []
     for dep in ctx.attr.deps:
         if LeanModuleInfo in dep:
             info = dep[LeanModuleInfo]
             dep_oleans.extend(info.transitive_oleans.to_list())
             dep_objects.extend(info.transitive_objects.to_list())
-            # Compute the root directory for this olean
-            # The olean path is like: bazel-out/.../Utils/Math.olean
-            # For module Utils.Math, we need the root (before Utils/)
-            olean = info.olean
-            dep_module = info.module_name
-            dep_module_path = dep_module.replace(".", "/") + ".olean"
-            if olean.path.endswith(dep_module_path):
-                root = olean.path[:-(len(dep_module_path) + 1)]
-                if root and root not in dep_olean_roots:
-                    dep_olean_roots.append(root)
+
+    # Compute root directories from ALL transitive olean files
+    # This ensures external package paths (like @lake//:Cli) are included in LEAN_PATH
+    # We collect all possible root directories by walking up from each olean file
+    for olean in dep_oleans:
+        if olean.path.endswith(".olean"):
+            # Add the directory containing the olean file
+            # For nested modules like Cli/Basic.olean, we also need the parent directory
+            path = olean.dirname
+            if path not in dep_olean_roots:
+                dep_olean_roots[path] = True
+            # Also add parent directories (for nested modules)
+            # Walk up max 5 levels to find package roots
+            for _ in range(5):
+                if "/" in path:
+                    path = path.rsplit("/", 1)[0]
+                    if path.endswith("bazel-out") or not path:
+                        break
+                    if path not in dep_olean_roots:
+                        dep_olean_roots[path] = True
+                else:
+                    break
 
     # Build LEAN_PATH from dependency olean root directories
-    lean_path = ":".join(dep_olean_roots) if dep_olean_roots else ""
+    lean_path = ":".join(dep_olean_roots.keys()) if dep_olean_roots else ""
 
     # Output files
     name = ctx.label.name

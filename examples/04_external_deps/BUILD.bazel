@@ -1,0 +1,24 @@
+load("@rules_lean//lean:defs.bzl", "lake_update", "lean_binary")
+
+# Run with: bazel run //:lake_update
+# This updates lake-manifest.json with resolved dependency versions.
+# Package downloads happen during `bazel build` when @lake repo fetches.
+lake_update(name = "lake_update")
+
+# Multi-file Lean application with external dependency on Cli
+#
+# The lean.from_lake() extension reads lake-manifest.json and creates
+# @lake repository with lean_module targets for all packages.
+#
+# The lean.project() extension generates @myapp with modules that can
+# depend on @lake//:Cli.
+#
+# Note: We depend on @lake//:Cli directly, not @myapp//:Main, because
+# lean_binary compiles src/Main.lean directly. Using deps = ["@myapp//:Main"]
+# would compile Main.lean twice (as module and as binary entry point),
+# causing duplicate symbol errors.
+lean_binary(
+    name = "app",
+    src = "src/Main.lean",
+    deps = ["@lake//:Cli"],
+)

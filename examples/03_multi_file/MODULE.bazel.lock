@@ -248,7 +248,7 @@
     },
     "@@rules_lean+//lean:extensions.bzl%lean": {
       "general": {
-        "bzlTransitiveDigest": "88n9NZ8fzYSyQN7Xf3DrUyYXd91LmcNavGRazN7cqDg=",
+        "bzlTransitiveDigest": "Ghfawc9JGf05DikpDAKuk3W1TssTH6jjuVO8v+LUdpk=",
         "usagesDigest": "h6/9VRUlnWPf3q7pCfcrqFtwl5pf4KGKir+ZlO8blfk=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
@@ -296,7 +296,8 @@
             "repoRuleId": "@@rules_lean+//lean/private:project.bzl%lean_project",
             "attributes": {
               "root": "src",
-              "lean_binary": "@@rules_lean++lean+lean_toolchain_linux_x86_64//:lean-4.27.0-linux/bin/lean"
+              "lean_binary": "@@rules_lean++lean+lean_toolchain_linux_x86_64//:lean-4.27.0-linux/bin/lean",
+              "deps": []
             }
           }
         }
