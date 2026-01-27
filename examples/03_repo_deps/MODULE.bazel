@@ -11,14 +11,13 @@ local_path_override(
     path = "../..",
 )
 
-# Register the lean_deps repository rule
+# Register the lean_deps repository rule directly (no module extension needed)
 # This will parse all .lean files in src/ and generate dependency information
-lean_deps_ext = use_extension("@rules_lean//lean:extensions.bzl", "lean_deps_ext")
-lean_deps_ext.parse(
+lean_deps = use_repo_rule("@rules_lean//lean:lean_deps_repo.bzl", "lean_deps")
+lean_deps(
     name = "my_lean_deps",
     src_dir = "src",
 )
-use_repo(lean_deps_ext, "my_lean_deps")
 
 # Also register the Lean toolchain for actual compilation
 lean = use_extension("@rules_lean//lean:extensions.bzl", "lean")

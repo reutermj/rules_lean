@@ -1,6 +1,5 @@
 """Bzlmod extensions for Lean toolchains."""
 
-load("//lean:lean_deps_repo.bzl", "lean_deps")
 load("//lean:repositories.bzl", "lean_download")
 
 _LEAN_PLATFORMS = {
@@ -34,28 +33,5 @@ lean = module_extension(
     implementation = _toolchain_impl,
     tag_classes = {
         "toolchain": _toolchain_tag,
-    },
-)
-
-# Module extension for lean_deps repository rule
-def _lean_deps_impl(ctx):
-    for mod in ctx.modules:
-        for parse_tag in mod.tags.parse:
-            lean_deps(
-                name = parse_tag.name,
-                src_dir = parse_tag.src_dir,
-            )
-
-_parse_tag = tag_class(
-    attrs = {
-        "name": attr.string(mandatory = True),
-        "src_dir": attr.string(mandatory = True),
-    },
-)
-
-lean_deps_ext = module_extension(
-    implementation = _lean_deps_impl,
-    tag_classes = {
-        "parse": _parse_tag,
     },
 )
