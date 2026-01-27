@@ -1,10 +1,9 @@
 module(
-    name = "example_02_hello_world",
+    name = "example_03_multi_file",
     version = "0.0.0",
 )
 
 bazel_dep(name = "rules_lean", version = "0.0.1")
-bazel_dep(name = "rules_shell", version = "0.3.0")
 
 local_path_override(
     module_name = "rules_lean",
@@ -23,6 +22,13 @@ register_toolchains("@toolchains_cc")
 
 lean = use_extension("@rules_lean//lean:extensions.bzl", "lean")
 lean.toolchain(version = "4.27.0")
-use_repo(lean, "lean_toolchain_linux_x86_64")
+
+# Auto-generate lean_module targets by parsing imports
+lean.project(
+    name = "mylib",
+    root = "src",
+)
+
+use_repo(lean, "lean_toolchain_linux_x86_64", "mylib")
 
 register_toolchains("@lean_toolchain_linux_x86_64//:lean_toolchain")
